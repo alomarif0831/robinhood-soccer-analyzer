@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+# Raw API caches and generated reports from live runs (demo data is committed)
+data/cache/
+data/live/
+reports/live/
+.env
+# Synthetic demo: regenerate with `rsa demo` (24 MB of raw JSON); keep only the rendered report
+data/demo/
+reports/demo/*.csv

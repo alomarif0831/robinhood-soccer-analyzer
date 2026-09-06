@@ -1,0 +1,266 @@
+{
+  "meta": {
+    "leagues": {
+      "epl": {
+        "espn_matches": 30,
+        "fdcouk_matches": 30,
+        "kalshi_markets": 90,
+        "kalshi_snapshots": 90
+      },
+      "laliga": {
+        "espn_matches": 30,
+        "fdcouk_matches": 30,
+        "kalshi_markets": 90,
+        "kalshi_snapshots": 90
+      },
+      "bundesliga": {
+        "espn_matches": 18,
+        "fdcouk_matches": 18,
+        "kalshi_markets": 54,
+        "kalshi_snapshots": 54
+      },
+      "seriea": {
+        "espn_matches": 20,
+        "fdcouk_matches": 20,
+        "kalshi_markets": 60,
+        "kalshi_snapshots": 60
+      },
+      "ligue1": {
+        "espn_matches": 27,
+        "fdcouk_matches": 27,
+        "kalshi_markets": 81,
+        "kalshi_snapshots": 81
+      },
+      "mls": {
+        "espn_matches": 103,
+        "fdcouk_matches": 0,
+        "kalshi_markets": 315,
+        "kalshi_snapshots": 309
+      }
+    },
+    "start": "2026-07-20",
+    "end": "2026-09-06",
+    "synthetic": true,
+    "fee_model": "robinhood",
+    "min_edge": 0.03,
+    "fill": "ask",
+    "slippage": 0.0,
+    "settlement_mismatches": 0,
+    "unmatched_events": 0,
+    "n_matches_window": 228,
+    "n_warmup": 1992,
+    "n_snapshots": 684
+  },
+  "n_matches": 228,
+  "scores": [
+    {
+      "source": "mktn",
+      "n": 228,
+      "brier": 0.6161131579179372,
+      "logloss": 1.0329224054088126
+    },
+    {
+      "source": "book",
+      "n": 228,
+      "brier": 0.6280600831393333,
+      "logloss": 1.0508670532783777
+    },
+    {
+      "source": "elo",
+      "n": 228,
+      "brier": 0.6264248504245697,
+      "logloss": 1.0411974329514075
+    },
+    {
+      "source": "poisson",
+      "n": 228,
+      "brier": 0.6313386546785258,
+      "logloss": 1.0456610799972084
+    },
+    {
+      "source": "blend",
+      "n": 228,
+      "brier": 0.6244353933559299,
+      "logloss": 1.041574740071704
+    }
+  ],
+  "bias_by_outcome": [
+    {
+      "outcome": "away",
+      "n": 228,
+      "mean_price": 0.3299122807017544,
+      "hit_rate": 0.27631578947368424,
+      "diff": -0.05359649122807014,
+      "se": 0.031138497055523528,
+      "z": -1.7212292273612764
+    },
+    {
+      "outcome": "draw",
+      "n": 228,
+      "mean_price": 0.24469298245614035,
+      "hit_rate": 0.29385964912280704,
+      "diff": 0.04916666666666669,
+      "se": 0.028471155516766603,
+      "z": 1.726893965989984
+    },
+    {
+      "outcome": "home",
+      "n": 228,
+      "mean_price": 0.447938596491228,
+      "hit_rate": 0.4298245614035088,
+      "diff": -0.01811403508771925,
+      "se": 0.03293331981128732,
+      "z": -0.5500215341640408
+    }
+  ],
+  "market_vs_book": [
+    {
+      "outcome": "home",
+      "n": 228,
+      "mean_diff": -0.006911063533631428,
+      "sd": 0.05903024556532602,
+      "t": -1.7678186817912602
+    },
+    {
+      "outcome": "draw",
+      "n": 228,
+      "mean_diff": -0.007705565225283539,
+      "sd": 0.045019745427237565,
+      "t": -2.584454493422051
+    },
+    {
+      "outcome": "away",
+      "n": 228,
+      "mean_diff": 0.014616628758914946,
+      "sd": 0.04721326724436537,
+      "t": 4.674665981511578
+    }
+  ],
+  "naive": [
+    {
+      "rule": "home",
+      "n": 228,
+      "risked": 114.34,
+      "profit": -16.34,
+      "roi": -0.14290711911841875,
+      "roi_ci_low": -0.2715785611475906,
+      "roi_ci_high": -0.02320950645294568,
+      "win_rate": 0.4298245614035088,
+      "avg_price": 0.4640350877192983
+    },
+    {
+      "rule": "draw",
+      "n": 228,
+      "risked": 67.5,
+      "profit": -0.5000000000000018,
+      "roi": -0.007407407407407434,
+      "roi_ci_low": -0.2081641264420263,
+      "roi_ci_high": 0.20276418997966394,
+      "win_rate": 0.29385964912280704,
+      "avg_price": 0.2622368421052632
+    },
+    {
+      "rule": "away",
+      "n": 228,
+      "risked": 87.14999999999998,
+      "profit": -24.15,
+      "roi": -0.2771084337349398,
+      "roi_ci_low": -0.4274601670647562,
+      "roi_ci_high": -0.12529419963923003,
+      "win_rate": 0.27631578947368424,
+      "avg_price": 0.3466228070175439
+    },
+    {
+      "rule": "favorite",
+      "n": 228,
+      "risked": 134.14999999999998,
+      "profit": -17.15,
+      "roi": -0.12784196794632874,
+      "roi_ci_low": -0.2383830301215578,
+      "roi_ci_high": -0.019066398100089015,
+      "win_rate": 0.5131578947368421,
+      "avg_price": 0.549342105263158
+    },
+    {
+      "rule": "underdog",
+      "n": 228,
+      "risked": 58.71,
+      "profit": 1.2899999999999987,
+      "roi": 0.021972406745017863,
+      "roi_ci_low": -0.1975832103098452,
+      "roi_ci_high": 0.251528744479521,
+      "win_rate": 0.2631578947368421,
+      "avg_price": 0.22578947368421054
+    },
+    {
+      "rule": "no_draw",
+      "n": 228,
+      "risked": 183.23000000000002,
+      "profit": -22.230000000000004,
+      "roi": -0.12132292746820936,
+      "roi_ci_low": -0.19776105196111868,
+      "roi_ci_high": -0.047818414925463605,
+      "win_rate": 0.706140350877193,
+      "avg_price": 0.7717543859649124
+    }
+  ],
+  "strategies": {
+    "book": {
+      "n": 77,
+      "risked": 43.36,
+      "profit": -2.36,
+      "roi": -0.0544280442804428,
+      "roi_ci_low": -0.24190674532883225,
+      "roi_ci_high": 0.12983424542691857,
+      "win_rate": 0.5324675324675324,
+      "avg_price": 0.5267532467532469,
+      "avg_edge": 0.059120970300727216,
+      "p_value_profit_le_0": 0.7105
+    },
+    "elo": {
+      "n": 258,
+      "risked": 105.12,
+      "profit": 2.879999999999999,
+      "roi": 0.02739726027397259,
+      "roi_ci_low": -0.1067462606892266,
+      "roi_ci_high": 0.16615495336501174,
+      "win_rate": 0.4186046511627907,
+      "avg_price": 0.3716279069767442,
+      "avg_edge": 0.0908936918073837,
+      "p_value_profit_le_0": 0.372
+    },
+    "poisson": {
+      "n": 219,
+      "risked": 107.64,
+      "profit": 7.359999999999998,
+      "roi": 0.06837606837606836,
+      "roi_ci_low": -0.06332726719734878,
+      "roi_ci_high": 0.19079184483536585,
+      "win_rate": 0.5251141552511416,
+      "avg_price": 0.45488584474885846,
+      "avg_edge": 0.08856752159562034,
+      "p_value_profit_le_0": 0.1545
+    },
+    "blend": {
+      "n": 85,
+      "risked": 44.269999999999996,
+      "profit": -5.27,
+      "roi": -0.11904224079512085,
+      "roi_ci_low": -0.3065394186538897,
+      "roi_ci_high": 0.07798783388160314,
+      "win_rate": 0.4588235294117647,
+      "avg_price": 0.48364705882352943,
+      "avg_edge": 0.060129296310628806,
+      "p_value_profit_le_0": 0.8735
+    }
+  },
+  "verdicts": [
+    "Venue prices and the closing line are statistically indistinguishable in accuracy (mean Brier gap -0.012, t=-1.6, n=228).",
+    "Versus the closing line the venue prices the draw below fair on average (-0.8 pts, t=-2.6, n=228).",
+    "Versus the closing line the venue prices the away above fair on average (+1.5 pts, t=4.7, n=228).",
+    "The **book**-based strategy's ROI of -5.4% (n=77) is not distinguishable from zero (95% CI -24.2% to +13.0%).",
+    "The **elo**-based strategy's ROI of +2.7% (n=258) is not distinguishable from zero (95% CI -10.7% to +16.6%).",
+    "The **poisson**-based strategy's ROI of +6.8% (n=219) is not distinguishable from zero (95% CI -6.3% to +19.1%).",
+    "The **blend**-based strategy's ROI of -11.9% (n=85) is not distinguishable from zero (95% CI -30.7% to +7.8%)."
+  ]
+}
