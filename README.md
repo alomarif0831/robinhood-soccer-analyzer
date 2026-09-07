@@ -49,11 +49,15 @@ Windows, macOS and Linux machines, so nobody needs Python installed:
    **robinhood-soccer-analyzer-windows** artifact. It contains `rsa.exe` and
    `rsa-<version>-windows-x64.exe` (same file, versioned name). A tag push also publishes them on
    the repository's *Releases* page.
-3. Unzip it anywhere and **double-click `rsa.exe`**. (The macOS/Linux artifacts hold a `.tar.gz`;
-   extract it with `tar xzf` so the file keeps its executable bit, then run `./rsa-<version>-macos-arm64`.
-   macOS refuses unsigned binaries once: allow it under *System Settings → Privacy & Security → Open
-   Anyway*, or run `xattr -d com.apple.quarantine rsa-<version>-macos-arm64` first. The Linux build
-   is made on Ubuntu 22.04 and needs glibc 2.35 or newer.) A menu appears: run the demo, fetch and
+3. Unzip it anywhere and **double-click `rsa.exe`**.
+
+The same run also produces **robinhood-soccer-analyzer-macos-arm64** (Apple Silicon: any Mac from
+late 2020 on) and **-macos-x64** (Intel Macs), each holding a `.dmg`. Open the DMG, drag the
+*Robinhood Soccer Analyzer* folder anywhere, and double-click **Run Robinhood Soccer Analyzer.command**
+for the same menu in a Terminal window. The build is unsigned, so the first launch needs
+*System Settings → Privacy & Security → Open Anyway* (or `xattr -d com.apple.quarantine rsa` in
+Terminal) once. The **-linux** artifact is a `.tar.gz` (extract with `tar xzf`; built on Ubuntu
+22.04, needs glibc 2.35+). A menu appears: run the demo, fetch and
    backtest live data, or re-analyze data fetched earlier. Reports land in a `reports/` folder
    next to where you ran it. Windows SmartScreen may warn once because the file is unsigned:
    *More info → Run anyway*.

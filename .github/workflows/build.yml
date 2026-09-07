@@ -1,6 +1,6 @@
 # Builds the executables on GitHub's own machines so nobody needs Python installed:
 #  - "Run workflow" in the Actions tab (or push a tag like v0.1.0) builds the
-#    Windows .exe plus macOS and Linux binaries.
+#    Windows .exe, macOS .dmg files (Apple Silicon + Intel) and a Linux binary.
 #  - Download them from the workflow run's "Artifacts" section, or from the
 #    Release page when a version was typed into the box / a tag was pushed.
 name: Build executables
@@ -28,13 +28,18 @@ jobs:
           - os: windows-latest
             artifact: windows
             pattern: release/*.exe
-          - os: macos-latest
-            artifact: macos
-            pattern: release/rsa-*-macos-*.tar.gz
+          - os: macos-latest        # Apple Silicon
+            artifact: macos-arm64
+            pattern: release/*.dmg
+          - os: macos-15-intel      # Intel Macs; optional so a runner shortage cannot block the release
+            artifact: macos-x64
+            pattern: release/*.dmg
+            optional: true
           - os: ubuntu-22.04   # oldest supported runner: the binary needs this glibc (2.35) or newer
             artifact: linux
             pattern: release/rsa-*-linux-*.tar.gz
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -65,12 +70,44 @@ jobs:
           "$exe" demo --data-dir smoke/data --out smoke/out --leagues epl,mls
           test -f smoke/out/report.md
           head -20 smoke/out/report.md
-      - name: Package (macOS/Linux keep the executable bit only inside a tarball)
-        if: runner.os != 'Windows'
+      - name: Package as .dmg (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          bin=$(ls release/rsa-*-macos-* | grep -v -E '\.(dmg|tar\.gz)$' | head -1)
+          name=$(basename "$bin")
+          stage="$(mktemp -d)/Robinhood Soccer Analyzer"
+          mkdir -p "$stage"
+          cp "$bin" "$stage/rsa"
+          chmod +x "$stage/rsa"
+          # Double-clickable launcher: .command files open in Terminal.
+          cat > "$stage/Run Robinhood Soccer Analyzer.command" <<'LAUNCHER'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          xattr -d com.apple.quarantine ./rsa 2>/dev/null || true
+          ./rsa
+          LAUNCHER
+          chmod +x "$stage/Run Robinhood Soccer Analyzer.command"
+          cat > "$stage/README.txt" <<'NOTE'
+          Robinhood Soccer Analyzer (macOS)
+
+          1. Drag this folder anywhere (e.g. Applications or your Desktop).
+          2. Double-click "Run Robinhood Soccer Analyzer.command". A Terminal window opens with the menu.
+             If macOS says it cannot verify the developer: System Settings > Privacy & Security > "Open Anyway",
+             then double-click it again. Or, in Terminal:  xattr -d com.apple.quarantine rsa && ./rsa
+          3. Reports are written to a "reports" folder next to the program.
+
+          Command line: ./rsa --help
+          NOTE
+          hdiutil create -volname "Robinhood Soccer Analyzer" -srcfolder "$stage" -ov -format UDZO "release/$name.dmg"
+          ls -la release
+      - name: Package as .tar.gz (Linux keeps the executable bit only inside an archive)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           cd release
-          for f in rsa-*-*; do
+          for f in rsa-*-linux-*; do
             case "$f" in *.tar.gz) continue;; esac
             tar czf "$f.tar.gz" "$f"
           done
@@ -102,4 +139,5 @@ jobs:
           name: Robinhood Soccer Analyzer ${{ inputs.release_tag || github.ref_name }}
           files: |
             release/rsa-*.exe
+            release/rsa-*.dmg
             release/rsa-*.tar.gz
