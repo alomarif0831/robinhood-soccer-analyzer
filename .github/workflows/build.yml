@@ -30,10 +30,10 @@ jobs:
             pattern: release/*.exe
           - os: macos-latest
             artifact: macos
-            pattern: release/rsa-*-macos-*
-          - os: ubuntu-latest
+            pattern: release/rsa-*-macos-*.tar.gz
+          - os: ubuntu-22.04   # oldest supported runner: the binary needs this glibc (2.35) or newer
             artifact: linux
-            pattern: release/rsa-*-linux-*
+            pattern: release/rsa-*-linux-*.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -65,17 +65,41 @@ jobs:
           "$exe" demo --data-dir smoke/data --out smoke/out --leagues epl,mls
           test -f smoke/out/report.md
           head -20 smoke/out/report.md
+      - name: Package (macOS/Linux keep the executable bit only inside a tarball)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd release
+          for f in rsa-*-*; do
+            case "$f" in *.tar.gz) continue;; esac
+            tar czf "$f.tar.gz" "$f"
+          done
+          ls -la
       - uses: actions/upload-artifact@v4
         with:
           name: robinhood-soccer-analyzer-${{ matrix.artifact }}
           path: ${{ matrix.pattern }}
           if-no-files-found: error
+
+  # Publish once, and only when every platform built: a Windows-only failure must not
+  # leave a Release with no .exe on it.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: robinhood-soccer-analyzer-*
+          merge-multiple: true
+          path: release
+      - run: ls -la release
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
           name: Robinhood Soccer Analyzer ${{ inputs.release_tag || github.ref_name }}
           files: |
-            release/rsa-*
+            release/rsa-*.exe
+            release/rsa-*.tar.gz

@@ -3,6 +3,8 @@ REM Builds release\rsa.exe (and release\rsa-<version>-windows-x64.exe) on this P
 REM Needs Python 3.10+ from python.org with "Add python.exe to PATH" ticked.
 REM No Python? Use GitHub instead: Actions -> "Build executables" -> Run workflow.
 setlocal
+REM Match the UTF-8 mode the packaged exe runs in, whatever the console code page is.
+set PYTHONUTF8=1
 cd /d "%~dp0"
 
 if not exist .venv (

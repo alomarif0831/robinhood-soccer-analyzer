@@ -29,6 +29,6 @@ def test_demo_pipeline_end_to_end(tmp_path):
     mv = result.market_vs_book.set_index("outcome")
     assert mv.loc["draw", "mean_diff"] < 0
     path = write_outputs(result, df, unmatched, reloaded, tmp_path / "out", {"synthetic": True, "start": "2026-07-20", "end": "2026-09-06"})
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert "SYNTHETIC DEMO DATA" in text and "## Verdict" in text
     assert (tmp_path / "out" / "summary.json").exists() and (tmp_path / "out" / "joined.csv").exists()

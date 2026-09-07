@@ -24,9 +24,31 @@ for matches played after the 2026 World Cup, net of fees.
 """
 
 
+class MenuQuit(Exception):
+    """Raised when stdin ends (EOF) in the middle of a prompt: treat it as quit."""
+
+
+def _read(input_fn: Callable[[str], str], prompt: str) -> str | None:
+    try:
+        return input_fn(prompt)
+    except EOFError:
+        return None
+
+
 def _ask(input_fn: Callable[[str], str], prompt: str, default: str) -> str:
-    raw = input_fn(f"{prompt} [{default}]: ").strip()
-    return raw or default
+    raw = _read(input_fn, f"{prompt} [{default}]: ")
+    if raw is None:
+        raise MenuQuit
+    return raw.strip() or default
+
+
+def pause_if_interactive(prompt: str = "Press Enter to close...") -> None:
+    """Keep a double-clicked console window open, but never block scripts, CI or hidden consoles."""
+    try:
+        if sys.stdin is not None and sys.stdin.isatty():
+            input(prompt)
+    except (EOFError, OSError, RuntimeError, ValueError):
+        pass
 
 
 def _choose(input_fn, prompt: str, default: str, options) -> str:
@@ -70,13 +92,18 @@ def run_menu(runner: Callable[[list[str]], int], input_fn: Callable[[str], str] 
     rc = 0
     while True:
         print(BANNER)
+        raw = _read(input_fn, "Choice: ")
+        if raw is None:
+            return rc
+        choice = raw.strip().lower()
+        if choice == "":
+            continue
+        if choice in ("q", "quit", "exit"):
+            return rc
         try:
-            choice = input_fn("Choice: ").strip().lower()
-        except EOFError:
+            argv = build_argv(choice, input_fn)
+        except MenuQuit:
             return rc
-        if choice in ("q", "quit", "exit", ""):
-            return rc
-        argv = build_argv(choice, input_fn)
         if argv is None:
             print("  unknown choice")
             continue
@@ -85,12 +112,16 @@ def run_menu(runner: Callable[[list[str]], int], input_fn: Callable[[str], str] 
             rc = runner(argv)
         except SystemExit as e:  # argparse --help exits
             rc = int(e.code or 0)
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            rc = 130
         except Exception as e:  # noqa: BLE001 - keep the window open, show the error
             print(f"\nERROR: {e}")
             rc = 1
         if once:
             return rc
-        input_fn("\nPress Enter to return to the menu...")
+        if _read(input_fn, "\nPress Enter to return to the menu...") is None:
+            return rc
 
 
 def is_frozen() -> bool:

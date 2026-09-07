@@ -185,7 +185,7 @@ def run(argv: list[str] | None = None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. With no arguments (a double-clicked .exe, or a bare `rsa`) show the menu."""
-    from .interactive import is_frozen, run_menu
+    from .interactive import is_frozen, pause_if_interactive, run_menu
 
     _utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         if not is_frozen():
             raise
         print(f"\nERROR: {e}", file=sys.stderr)
-        input("Press Enter to close...")
+        pause_if_interactive()
         return 1
 
 

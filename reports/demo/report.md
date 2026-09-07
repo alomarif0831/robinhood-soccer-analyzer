@@ -2,7 +2,7 @@
 
 > **SYNTHETIC DEMO DATA.** Every price and score in this report was simulated by `rsa demo` with planted biases so you can see what the analysis looks like. Nothing here is a real finding.
 
-Generated 2026-09-06 23:40 UTC. Window **2026-07-20 → 2026-09-06** (post-World-Cup). Fee model: **robinhood**; fills at **ask**.
+Generated 2026-09-07 00:15 UTC. Window **2026-07-20 → 2026-09-06** (post-World-Cup). Fee model: **robinhood**; fills at **ask**.
 
 - Fixtures in window: 228 (228 completed); warm-up results for models: 1992
 - Venue price snapshots: 684; priced events matched to a fixture: 228; unmatched events: 0

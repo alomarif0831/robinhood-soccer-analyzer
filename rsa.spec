@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec: single-file console executable. Built by scripts/build_exe.py
-# (which sets RSA_EXE_NAME to e.g. rsa-0.1.0-windows-x64); `pyinstaller rsa.spec`
-# on its own produces release/rsa[.exe].
+# (which sets RSA_EXE_NAME to e.g. rsa-0.1.0-windows-x64 and --distpath release/);
+# `pyinstaller rsa.spec` on its own writes dist/rsa[.exe].
 import os
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
@@ -19,9 +19,10 @@ excludes = ["tkinter", "matplotlib", "scipy", "IPython", "pytest", "PIL"]
 if os.environ.get("RSA_BUNDLE_CRYPTOGRAPHY") != "1":
     excludes.append("cryptography")
 
+# SPECPATH is the directory holding this spec file, so the build works from any cwd.
 a = Analysis(
-    ["scripts/launcher.py"],
-    pathex=["."],
+    [os.path.join(SPECPATH, "scripts", "launcher.py")],
+    pathex=[SPECPATH],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

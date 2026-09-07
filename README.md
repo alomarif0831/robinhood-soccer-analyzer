@@ -49,7 +49,11 @@ Windows, macOS and Linux machines, so nobody needs Python installed:
    **robinhood-soccer-analyzer-windows** artifact. It contains `rsa.exe` and
    `rsa-<version>-windows-x64.exe` (same file, versioned name). A tag push also publishes them on
    the repository's *Releases* page.
-3. Unzip it anywhere and **double-click `rsa.exe`**. A menu appears: run the demo, fetch and
+3. Unzip it anywhere and **double-click `rsa.exe`**. (The macOS/Linux artifacts hold a `.tar.gz`;
+   extract it with `tar xzf` so the file keeps its executable bit, then run `./rsa-<version>-macos-arm64`.
+   macOS refuses unsigned binaries once: allow it under *System Settings → Privacy & Security → Open
+   Anyway*, or run `xattr -d com.apple.quarantine rsa-<version>-macos-arm64` first. The Linux build
+   is made on Ubuntu 22.04 and needs glibc 2.35 or newer.) A menu appears: run the demo, fetch and
    backtest live data, or re-analyze data fetched earlier. Reports land in a `reports/` folder
    next to where you ran it. Windows SmartScreen may warn once because the file is unsigned:
    *More info → Run anyway*.

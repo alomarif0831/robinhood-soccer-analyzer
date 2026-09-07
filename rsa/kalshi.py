@@ -432,7 +432,13 @@ def build_snapshots(
 
 
 def _load_private_key(path: str):
-    from cryptography.hazmat.primitives import serialization
-
+    try:
+        from cryptography.hazmat.primitives import serialization
+    except ImportError:
+        raise KalshiError(
+            "Kalshi API-key signing needs the 'cryptography' package, which is not included in the packaged "
+            "executable. The public market-data endpoints work without a key: drop --kalshi-key-id, or run "
+            "from a Python install with `pip install cryptography`."
+        ) from None
     with open(path, "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
