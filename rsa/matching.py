@@ -68,6 +68,12 @@ class MatchedMarket:
         else:
             row["book_home"] = row["book_draw"] = row["book_away"] = None
             row["book_source"] = None
+        bpre = bookmaker_probs(self.match.odds, PREMATCH_BOOK_PREFERENCE)
+        if bpre:
+            (row["bookpre_home"], row["bookpre_draw"], row["bookpre_away"]), row["bookpre_source"] = bpre
+        else:
+            row["bookpre_home"] = row["bookpre_draw"] = row["bookpre_away"] = None
+            row["bookpre_source"] = None
         bc = bookmaker_probs(self.match.odds, CLOSING_BOOK_PREFERENCE)
         if bc:
             (row["bookc_home"], row["bookc_draw"], row["bookc_away"]), row["bookc_source"] = bc
@@ -168,7 +174,7 @@ def matched_frame(matched: list[MatchedMarket]) -> pd.DataFrame:
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True)
     df["snapshot_time"] = pd.to_datetime(df["snapshot_time"], utc=True, errors="coerce")
     for o in OUTCOMES:
-        for pre in ("mkt", "bid", "ask", "vol", "book", "bookc", "close", "cbid", "cask", "open"):
+        for pre in ("mkt", "bid", "ask", "vol", "book", "bookpre", "bookc", "close", "cbid", "cask", "open"):
             col = f"{pre}_{o}"
             if col in df:
                 df[col] = pd.to_numeric(df[col], errors="coerce")

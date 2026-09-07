@@ -10,9 +10,11 @@
   const TABS = [["dashboard", "Dashboard"], ["picks", "Picks"], ["backtest", "Backtest"], ["matches", "Matches"], ["settings", "Settings"]];
 
   // ---------------------------------------------------------------- utils
+  const TOKEN = (document.querySelector('meta[name="hq-token"]') || {}).content || "";
   async function api(path, opts) {
-    const r = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
-    const data = await r.json().catch(() => ({}));
+    const r = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json", "X-HQ-Token": TOKEN } }, opts || {}));
+    let data;
+    try { data = await r.json(); } catch (e) { throw new Error("Bad response from the HQ server (" + r.status + ")"); }
     if (!r.ok) throw new Error(data.error || (r.status + " " + r.statusText));
     return data;
   }
@@ -32,7 +34,7 @@
   }
   const fmtKick = (iso) => {
     if (!iso) return "–";
-    const d = new Date(iso);
+    const d = new Date(String(iso).replace(" ", "T"));
     return isNaN(d) ? esc(iso) : d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   };
   const cls = (v) => (isNum(v) ? (v > 0 ? "pos" : v < 0 ? "neg" : "") : "");
@@ -169,7 +171,10 @@
     } catch (e) { /* server going away */ }
     pollTimer = setTimeout(pollJobs, 8000);
   }
-  setInterval(() => fetch("/api/heartbeat").catch(() => {}), 5000);
+  const heartbeat = () => fetch("/api/heartbeat").catch(() => {});
+  heartbeat();
+  setInterval(heartbeat, 5000);
+  window.addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/bye"); } catch (e) { /* ignore */ } });
 
   // ---------------------------------------------------------------- rendering
   function render() { renderTabs(); renderStatus(); renderActions(); renderView(); renderActivity(); renderDrawer(); }
@@ -203,9 +208,14 @@
     $("#b-activity").onclick = () => { state.activityOpen = !state.activityOpen; renderActivity(); };
     $("#b-theme").onclick = async () => {
       const cur = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-      try { state.info.settings = await api("/api/settings", { method: "POST", body: JSON.stringify({ theme: cur }) }); applyTheme(cur); } catch (e) { toast(e.message, "error"); }
+      try { state.info.settings = await api("/api/settings", { method: "POST", body: JSON.stringify({ theme: cur }) }); applyTheme(cur); if (state.settingsDraft) state.settingsDraft.theme = cur; } catch (e) { toast(e.message, "error"); }
     };
-    $("#b-quit").onclick = async () => { if (confirm("Quit Robinhood Soccer HQ?")) { await api("/api/quit", { method: "POST" }).catch(() => {}); document.body.innerHTML = '<div class="empty"><h2>Robinhood Soccer HQ closed</h2><p>You can close this window.</p></div>'; } };
+    $("#b-quit").onclick = async () => {
+      const busy = state.job && state.job.status === "running";
+      if (!confirm(busy ? "A job is still running. Quit anyway and abandon it?" : "Quit Robinhood Soccer HQ?")) return;
+      try { await api("/api/quit", { method: "POST", body: JSON.stringify({ force: busy }) }); } catch (e) { toast(e.message, "error"); return; }
+      document.body.innerHTML = '<div class="empty"><h2>Robinhood Soccer HQ closed</h2><p>You can close this window.</p></div>';
+    };
   }
   function renderActivity() {
     const a = $("#activity");
@@ -308,15 +318,20 @@
   }
   function blockedBy(r) {
     const s = state.info ? state.info.settings : {};
+    const minConf = isNum(s.min_confidence) ? s.min_confidence : 60, minEdge = isNum(s.min_edge) ? s.min_edge : 0.03;
     const out = [];
-    if (isNum(r.confidence) && r.confidence < (s.min_confidence || 60)) out.push("confidence");
-    if (isNum(r.edge) && r.edge < (s.min_edge || 0.03)) out.push("edge");
+    if (isNum(r.confidence) && r.confidence < minConf) out.push("confidence");
+    if (isNum(r.edge) && r.edge < minEdge) out.push("edge");
     if (isNum(r.edge_q20) && r.edge_q20 < 0) out.push("edge q20 < 0");
+    if (isNum(r.edge_mid) && r.edge_mid < 0.01) out.push("edge vs mid");
     if (isNum(r.book_edge) && r.book_edge < 0) out.push("book line disagrees");
     if (isNum(r.spread) && r.spread > 0.06) out.push("spread");
+    if (isNum(r.stale_hours) && r.stale_hours > 48) out.push("stale quote");
     if (r.quotes_ok === false) out.push("quotes inconsistent");
     if (isNum(r.price) && (r.price < 0.1 || r.price > 0.9)) out.push("price band");
-    return out.join(", ") || "one bet per match";
+    const lot = Math.floor(Math.min((r.kelly_full || 0) * (isNum(s.kelly) ? s.kelly : 0.25), isNum(s.max_bet) ? s.max_bet : 0.02) * (isNum(s.bankroll) ? s.bankroll : 1000) / (r.price + (r.fee || 0)));
+    if (isNum(lot) && lot < 10) out.push("lot < 10 contracts");
+    return out.join(", ") || "another contract of this match ranked higher";
   }
   function bindPicks() { const b = $("#p-run"); if (b) b.onclick = () => runJob("picks"); }
 
@@ -451,7 +466,7 @@
       const key = el.id.replace(/^s-/, ""); if (key in s || key === "end") s[key] = el.type === "number" ? Number(el.value) : el.value;
     });
     $("#s-save").onclick = async () => {
-      try { state.info.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(s) }); applyTheme(state.info.settings.theme); $("#s-msg").textContent = "Saved."; toast("Settings saved", "ok"); }
+      try { state.info.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(s) }); applyTheme(state.info.settings.theme); state.settingsDraft = null; $("#s-msg").textContent = "Saved."; toast("Settings saved", "ok"); }
       catch (e) { $("#s-msg").textContent = e.message; toast(e.message, "error"); }
     };
     $("#s-upd").onclick = async () => { $("#s-upd-msg").textContent = "Checking…"; state.updates = await api("/api/updates"); $("#s-upd-msg").textContent = updatesText(state.updates); };

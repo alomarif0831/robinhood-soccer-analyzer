@@ -53,7 +53,8 @@ def main() -> int:
     shutil.copy2(cli, release / f"rsa{suffix}")
     shutil.copy2(gui, release / f"RobinhoodSoccerHQ{suffix}")
     out = subprocess.run([str(cli), "--version"], capture_output=True, text=True, check=True).stdout.strip()
-    smoke = subprocess.run([str(gui), "hq", "--smoke"], capture_output=True, text=True)
+    smoke_home = ROOT / "build" / "smoke-home"
+    smoke = subprocess.run([str(gui), "hq", "--smoke"], capture_output=True, text=True, env=dict(os.environ, RSA_HOME=str(smoke_home)))
     print(f"\nBuilt {cli} ({cli.stat().st_size / 1e6:.1f} MB), reports version {out}")
     print(f"Built {gui} ({gui.stat().st_size / 1e6:.1f} MB); `hq --smoke` exit code {smoke.returncode}")
     if smoke.returncode != 0:

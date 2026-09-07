@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import platform
+import secrets
+import socket
 import shutil
 import subprocess
 import sys
@@ -57,14 +60,36 @@ def _read_csv(path: Path) -> pd.DataFrame | None:
         return None
 
 
+IDLE_SECONDS = 300      # browsers throttle timers in hidden windows to once a minute; give plenty of slack
+BYE_GRACE_SECONDS = 12  # after the page says goodbye, wait this long for a reload before quitting
+
+
+def _sanitize(obj):
+    """Replace NaN/Infinity (not valid JSON) with null, recursively."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 class HQState:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
         self.runner = JobRunner()
         self.started = time.time()
         self.last_heartbeat: float | None = None
+        self.bye_at: float | None = None
         self.window_opened = False
+        self.window_proc: subprocess.Popen | None = None
         self.shutdown_requested = False
+        self.token = secrets.token_urlsafe(24)   # required on every POST: blocks cross-site requests from other pages
+
+    def touch(self) -> None:
+        self.last_heartbeat = time.time()
+        self.bye_at = None
 
     # ---------------------------------------------------------------- data access
     def _reports(self, source: str) -> Path:
@@ -75,6 +100,7 @@ class HQState:
 
     def info(self) -> dict:
         out = {"app": APP_NAME, "version": __version__, "app_dir": str(app_dir()), "frozen": bool(getattr(sys, "frozen", False)),
+               "idle_seconds": IDLE_SECONDS,
                "settings": self.settings.values, "job": self.runner.status()["current"], "sources": {}}
         for src in ("live", "demo"):
             d, r = self._data(src), self._reports(src)
@@ -98,7 +124,7 @@ class HQState:
         r = self._reports(source)
         summary = {}
         if (r / "summary.json").exists():
-            summary = json.loads((r / "summary.json").read_text(encoding="utf-8"))
+            summary = json.loads((r / "summary.json").read_text(encoding="utf-8"), parse_constant=lambda _c: None)
         port = _read_csv(r / "pro_portfolio.csv")
         return {"summary": summary, "markdown": (r / "report.md").read_text(encoding="utf-8") if (r / "report.md").exists() else "",
                 "generated": (r / "summary.json").stat().st_mtime if (r / "summary.json").exists() else None,
@@ -182,7 +208,7 @@ def make_handler(state: HQState):
 
         # -------- helpers
         def _json(self, payload, status: int = 200) -> None:
-            body = json.dumps(payload, default=str).encode("utf-8")
+            body = json.dumps(_sanitize(payload), default=str, allow_nan=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -196,6 +222,8 @@ def make_handler(state: HQState):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             data = path.read_bytes()
+            if name == "index.html":
+                data = data.replace(b"<head>", f'<head><meta name="hq-token" content="{state.token}">'.encode("utf-8"), 1)
             self.send_response(200)
             self.send_header("Content-Type", CONTENT_TYPES.get(path.suffix, "application/octet-stream"))
             self.send_header("Content-Length", str(len(data)))
@@ -208,15 +236,31 @@ def make_handler(state: HQState):
             if not n:
                 return {}
             try:
-                return json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+                parsed = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             except ValueError:
                 return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        def _same_origin(self) -> bool:
+            """Only this page may call the API: exact Host (defeats DNS rebinding), same-origin Origin if sent,
+            and the per-process token plus JSON content type on writes."""
+            port = self.server.server_address[1]
+            if (self.headers.get("Host") or "") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return False
+            origin = self.headers.get("Origin")
+            if origin and not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
+                return False
+            return True
 
         # -------- routes
         def do_GET(self) -> None:  # noqa: N802
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             source = q.get("source", "live")
+            if not self._same_origin():
+                return self._json({"error": "forbidden"}, 403)
+            if u.path.startswith("/api/"):
+                state.touch()   # any API traffic proves the window is alive
             try:
                 if u.path in ("/", "/index.html"):
                     return self._static("index.html")
@@ -237,7 +281,6 @@ def make_handler(state: HQState):
                 if u.path == "/api/updates":
                     return self._json(state.check_updates())
                 if u.path == "/api/heartbeat":
-                    state.last_heartbeat = time.time()
                     return self._json({"ok": True, "busy": state.runner.busy()})
                 self.send_error(HTTPStatus.NOT_FOUND)
             except Exception as e:  # noqa: BLE001
@@ -246,12 +289,21 @@ def make_handler(state: HQState):
 
         def do_POST(self) -> None:  # noqa: N802
             u = urlparse(self.path)
+            if not self._same_origin():
+                return self._json({"error": "forbidden"}, 403)
+            if u.path == "/api/bye":
+                # sent by the page on unload (sendBeacon, no custom headers); a reload cancels it via the next heartbeat
+                state.bye_at = time.time()
+                return self._json({"ok": True})
+            if self.headers.get("X-HQ-Token") != state.token or not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                return self._json({"error": "forbidden"}, 403)
+            state.touch()
             body = self._body()
             try:
                 if u.path == "/api/settings":
                     try:
                         return self._json(state.settings.update(body))
-                    except ValueError as e:
+                    except (ValueError, TypeError) as e:
                         return self._json({"error": str(e)}, 400)
                 if u.path.startswith("/api/jobs/"):
                     name = u.path.rsplit("/", 1)[1]
@@ -259,9 +311,11 @@ def make_handler(state: HQState):
                         return self._json(state.start_job(name, body))
                     except KeyError:
                         return self._json({"error": f"unknown job {name}"}, 404)
-                    except RuntimeError as e:
+                    except (RuntimeError, ValueError, TypeError) as e:
                         return self._json({"error": str(e)}, 409)
                 if u.path == "/api/quit":
+                    if state.runner.busy() and not body.get("force"):
+                        return self._json({"ok": False, "busy": True, "error": f"{state.runner.current.name} is still running"}, 409)
                     state.shutdown_requested = True
                     return self._json({"ok": True})
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -293,41 +347,75 @@ def _browser_candidates() -> list[str]:
     return [c for c in cands if os.path.exists(c)]
 
 
-def open_window(url: str) -> str:
-    """Open the HQ as an app-style window (Chrome/Edge --app) or fall back to the default browser."""
+def open_window(url: str) -> tuple[str, subprocess.Popen | None]:
+    """Open the HQ as an app-style window (Chrome/Edge --app) or fall back to the default browser.
+
+    Returns (description, process). With its own profile directory the launched browser process is
+    the window's real process, so its exit is a reliable "window closed" signal."""
     profile = app_dir() / "browser-profile"
     for exe in _browser_candidates():
         try:
-            subprocess.Popen([exe, f"--app={url}", "--window-size=1320,900", f"--user-data-dir={profile}", "--no-first-run",
-                              "--no-default-browser-check"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return f"app window ({Path(exe).name})"
+            proc = subprocess.Popen([exe, f"--app={url}", "--window-size=1320,900", f"--user-data-dir={profile}", "--no-first-run",
+                                     "--no-default-browser-check", "--disable-background-timer-throttling"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return f"app window ({Path(exe).name})", proc
         except OSError:
             continue
     webbrowser.open(url)
-    return "default browser"
+    return "default browser", None
 
 
 # ------------------------------------------------------------------ entry
-def serve(port: int = 0, open_ui: bool = True, exit_on_idle: bool = True, smoke: bool = False, settings: Settings | None = None) -> int:
-    state = HQState(settings)
-    log_file = app_dir() / "hq.log"
-    fh = logging.FileHandler(log_file, encoding="utf-8")
-    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logging.getLogger().addHandler(fh)
-    logging.getLogger().setLevel(logging.INFO)
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second instance bind a port that is already listening; refuse that instead.
+    allow_reuse_address = platform.system() != "Windows"
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
-    httpd.daemon_threads = True
+    def server_bind(self) -> None:
+        if platform.system() == "Windows" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def _say(msg: str) -> None:
+    if sys.stdout is not None:
+        print(msg)
+
+
+def serve(port: int = 0, open_ui: bool = True, exit_on_idle: bool = True, smoke: bool = False, settings: Settings | None = None) -> int:
+    root = logging.getLogger()
+    fh = logging.FileHandler(app_dir() / "hq.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(fh)
+    if root.level == logging.NOTSET or root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    state = HQState(settings)
+    try:
+        httpd = _Server(("127.0.0.1", port), make_handler(state))
+    except OSError as e:
+        log.exception("cannot listen on 127.0.0.1:%s", port)
+        _say(f"Cannot listen on port {port}: {e}")
+        return 1
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
-    print(f"{APP_NAME} v{__version__} running at {url}  (data in {app_dir()})")
+    _say(f"{APP_NAME} v{__version__} running at {url}  (data in {app_dir()})")
     log.info("serving at %s", url)
 
     def watchdog() -> None:
         while not state.shutdown_requested:
             time.sleep(2)
-            if exit_on_idle and state.window_opened and state.last_heartbeat and time.time() - state.last_heartbeat > 45 \
-                    and time.time() - state.started > 90 and not state.runner.busy():
-                log.info("no UI heartbeat for 45s; shutting down")
+            if not exit_on_idle or not state.window_opened or state.runner.busy():
+                continue
+            now = time.time()
+            last = state.last_heartbeat or state.started
+            proc = state.window_proc
+            if proc is not None and proc.poll() is not None and now - state.started > 20:
+                log.info("app window process exited; shutting down")
+                state.shutdown_requested = True
+            elif state.bye_at and now - state.bye_at > BYE_GRACE_SECONDS and state.last_heartbeat and state.last_heartbeat <= state.bye_at:
+                log.info("window closed; shutting down")
+                state.shutdown_requested = True
+            elif now - last > IDLE_SECONDS:
+                log.info("no UI heartbeat for %ss; shutting down", IDLE_SECONDS)
                 state.shutdown_requested = True
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
@@ -341,16 +429,19 @@ def serve(port: int = 0, open_ui: bool = True, exit_on_idle: bool = True, smoke:
             js = resp.read().decode("utf-8")
         httpd.shutdown()
         if APP_NAME not in page or "viewDashboard" not in js:
-            print("smoke FAILED: UI files are not being served", file=sys.stderr)
+            log.error("smoke FAILED: UI files are not being served from %s", UI_DIR)
+            _say("smoke FAILED: UI files are not being served")
             return 1
-        print(f"smoke ok: {info['app']} {info['version']} (UI served from {UI_DIR})")
+        _say(f"smoke ok: {info['app']} {info['version']} (UI served from {UI_DIR})")
         return 0
 
     threading.Thread(target=watchdog, daemon=True).start()
     if open_ui:
-        how = open_window(url)
+        how, state.window_proc = open_window(url)
         state.window_opened = True
-        print(f"Opened the HQ in your {how}. Close this window or use Quit in the app to stop.")
+        state.touch()
+        log.info("opened the HQ in %s", how)
+        _say(f"Opened the HQ in your {how}. Close the window (or use Quit in the app) to stop.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -191,10 +191,13 @@ def walk_forward_pool(df: pd.DataFrame, min_train: int = MIN_TRAIN, n_boot: int 
     df["pro_set"] = None
     if "kickoff" not in df or df.empty:
         return df
-    days = pd.to_datetime(df["kickoff"], utc=True).dt.date
+    kick = pd.to_datetime(df["kickoff"], utc=True)
+    days = kick.dt.date
     settled = df["result"].isin(OUTCOMES)
     for day in sorted(days.dropna().unique()):
         today = days == day
+        # a match is "finished" for training only if it kicked off at least 150 min before the first kickoff of this day
+        finished = kick <= (kick[today].min() - pd.Timedelta(minutes=150))
         for set_name, sources in SOURCE_SETS.items():
             avail = has_sources(df, sources)
             rows = today & avail
@@ -202,7 +205,7 @@ def walk_forward_pool(df: pd.DataFrame, min_train: int = MIN_TRAIN, n_boot: int 
                 rows &= ~has_sources(df, SOURCE_SETS["full"])   # only rows that lack a book line
             if not rows.any():
                 continue
-            train = settled & avail & (days < day)
+            train = settled & avail & finished
             if train.sum() >= min_train:
                 age = np.array([(day - d).days for d in days[train]], dtype=float)
                 fit = fit_pool(log_probs(df[train], sources), _result_index(df[train]), set_name, n_boot=n_boot, seed=seed,

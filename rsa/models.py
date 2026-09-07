@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from .results import Match
@@ -36,6 +36,9 @@ class Elo:
         self.games: dict[str, int] = defaultdict(int)
         self.home_adv_by_league: dict[str, float] = {}
         self.league_of: dict[str, str] = {}
+        self.last_kickoff: dict[str, datetime] = {}
+
+    SEASON_GAP_DAYS = 60   # above any winter/World-Cup pause, below every real off-season
 
     def rating(self, team: str) -> float:
         return self.ratings.get(canonical(team), self.initial)
@@ -69,8 +72,43 @@ class Elo:
             self.league_of[a] = league
         return delta
 
+    def observe(self, m: Match) -> None:
+        """Season-boundary bookkeeping for one match in kickoff order: regress the league when its last
+        match was more than a season gap ago, seed unseen teams, and remember the kickoff."""
+        if m.kickoff is None:
+            return
+        last = self.last_kickoff.get(m.league)
+        if last is not None and (m.kickoff - last).days > self.SEASON_GAP_DAYS:
+            self.regress_league(m.league)
+        for team in (m.home, m.away):
+            self.seed_team(team, m.league)
+        self.last_kickoff[m.league] = max(last, m.kickoff) if last else m.kickoff
+
+    def regress_league(self, league: str, regress: float = 0.75) -> None:
+        teams = [t for t, lg in self.league_of.items() if lg == league]
+        if not teams:
+            return
+        mean = sum(self.ratings[t] for t in teams) / len(teams)
+        for t in teams:
+            self.ratings[t] = mean + regress * (self.ratings[t] - mean)
+
+    def seed_team(self, team: str, league: str, regress: float = 0.75) -> None:
+        """A team unseen in a league with ratings starts at the level of the three lowest-rated teams
+        (a proxy for the relegated sides), regressed like everyone else."""
+        key = canonical(team)
+        if key in self.ratings:
+            return
+        teams = [t for t, lg in self.league_of.items() if lg == league]
+        if len(teams) < 3:
+            return
+        rs = sorted(self.ratings[t] for t in teams)
+        mean = sum(rs) / len(rs)
+        self.ratings[key] = mean + regress * (sum(rs[:3]) / 3 - mean)
+        self.league_of[key] = league
+
     def fit(self, matches: Iterable[Match]) -> "Elo":
         for m in sorted((x for x in matches if x.completed), key=lambda x: x.kickoff or datetime.min.replace(tzinfo=timezone.utc)):
+            self.observe(m)
             self.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")), m.league)
         return self
 
@@ -99,23 +137,10 @@ class Elo:
         return self.home_adv_by_league
 
     def season_boundary(self, upcoming: Iterable[Match], regress: float = 0.75) -> None:
-        """New season: regress every rating toward its league mean and seed unseen (promoted) teams
-        at the mean of the three lowest-rated teams of that league (a proxy for the relegated sides)."""
-        by_league: dict[str, list[str]] = {}
-        for t, lg in self.league_of.items():
-            by_league.setdefault(lg, []).append(t)
-        means = {lg: sum(self.ratings[t] for t in ts) / len(ts) for lg, ts in by_league.items() if ts}
-        bottoms = {lg: sorted(self.ratings[t] for t in ts)[:3] for lg, ts in by_league.items() if ts}
-        for lg, ts in by_league.items():
-            for t in ts:
-                self.ratings[t] = means[lg] + regress * (self.ratings[t] - means[lg])
-        for m in upcoming:
-            for team in (m.home, m.away):
-                key = canonical(team)
-                if key not in self.ratings and m.league in bottoms and bottoms[m.league]:
-                    b = bottoms[m.league]
-                    self.ratings[key] = means[m.league] + regress * (sum(b) / len(b) - means[m.league])
-                    self.league_of[key] = m.league
+        """Apply :meth:`observe` to upcoming fixtures: regresses a league across a real season gap and
+        seeds unseen (promoted) teams. Idempotent for fixtures inside the same season."""
+        for m in sorted((x for x in upcoming if x.kickoff), key=lambda x: x.kickoff):
+            self.observe(m)
 
 
 class PoissonModel:
@@ -222,14 +247,30 @@ class ModelSet:
         self.elo = elo or Elo()
         self.poisson: dict[str, PoissonModel] = {}
 
+    SEASON_GAP_DAYS = Elo.SEASON_GAP_DAYS
+
     def fit(self, history: list[Match], as_of: datetime | None = None, upcoming: list[Match] | None = None) -> "ModelSet":
         hist = sorted([m for m in history if m.completed and m.kickoff], key=lambda m: m.kickoff)
         self.elo.calibrate_home_advantage(hist)
         self.elo.fit(hist)
         if upcoming:
-            self.elo.season_boundary(upcoming)
+            self.elo.season_boundary(upcoming)   # regresses only leagues whose last match is > SEASON_GAP_DAYS ago
         self.refit_poisson(hist, as_of)
         return self
+
+    @classmethod
+    def new_season_fixtures(cls, history: list[Match], upcoming: list[Match]) -> list[Match]:
+        """Upcoming fixtures of leagues whose last completed match is more than a season gap ago."""
+        last: dict[str, datetime] = {}
+        for m in history:
+            if m.completed and m.kickoff and (m.league not in last or m.kickoff > last[m.league]):
+                last[m.league] = m.kickoff
+        first: dict[str, datetime] = {}
+        for m in upcoming:
+            if m.kickoff and (m.league not in first or m.kickoff < first[m.league]):
+                first[m.league] = m.kickoff
+        gap = {lg: (first[lg] - last[lg]).days for lg in first if lg in last}
+        return [m for m in upcoming if m.league in gap and gap[m.league] > cls.SEASON_GAP_DAYS]
 
     def refit_poisson(self, history: list[Match], as_of: datetime | None = None) -> None:
         by_league: dict[str, list[Match]] = {}
@@ -256,19 +297,24 @@ def walk_forward(matches_window: list[Match], warmup: list[Match], elo: Elo | No
     models = ModelSet(elo)
     history = sorted([m for m in warmup if m.completed and m.kickoff], key=lambda m: m.kickoff)
     window = sorted([m for m in matches_window if m.kickoff], key=lambda m: m.kickoff)
-    models.fit(history, upcoming=window)
+    models.fit(history)   # boundaries inside the window are detected match by match below
     preds: dict[str, dict[str, Probs]] = {}
     last_fit_day = None
-    pending: list[Match] = []
+    pending: list[Match] = []      # completed window matches not yet old enough to count as finished
     for m in window:
         day = m.kickoff.date()
-        if day != last_fit_day:
-            history.extend(pending)
-            pending = []
-            models.refit_poisson(history, as_of=m.kickoff.replace(hour=0, minute=0, second=0, microsecond=0))
+        cutoff = m.kickoff - timedelta(minutes=150)
+        done = [p for p in pending if p.kickoff <= cutoff]
+        if done:
+            history.extend(done)
+            pending = [p for p in pending if p.kickoff > cutoff]
+            for p in done:
+                models.elo.update(p.home, p.away, p.home_goals, p.away_goals, bool(p.extra.get("neutral")), p.league)
+        if day != last_fit_day or done:
+            models.refit_poisson(history, as_of=m.kickoff)
             last_fit_day = day
+        models.elo.observe(m)      # season gap -> regress that league; promoted teams seeded
         preds[m.match_id] = models.predict(m)
         if m.completed:
-            models.elo.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")), m.league)
             pending.append(m)
     return preds

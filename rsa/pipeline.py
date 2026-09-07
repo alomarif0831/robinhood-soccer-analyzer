@@ -128,12 +128,19 @@ def collect(
 
 # ------------------------------------------------------------------ persistence
 def save_bundle(bundle: Bundle, data_dir: str | Path) -> None:
+    """Write the bundle atomically: every file goes to a .tmp sibling first, then is swapped into place,
+    so an interrupted run (Quit, Ctrl-C, crash) never leaves a half-written data set behind."""
+    import os
+
     d = Path(data_dir)
     d.mkdir(parents=True, exist_ok=True)
-    matches_to_frame(bundle.matches).to_csv(d / "matches.csv", index=False)
-    matches_to_frame(bundle.warmup).to_csv(d / "warmup.csv", index=False)
-    save_prices_csv(bundle.snapshots, d / "snapshots.csv")
-    (d / "meta.json").write_text(json.dumps(bundle.meta, indent=2, default=str), encoding="utf-8")
+    tmp = {name: d / f"{name}.tmp" for name in ("matches.csv", "warmup.csv", "snapshots.csv", "meta.json")}
+    matches_to_frame(bundle.matches).to_csv(tmp["matches.csv"], index=False)
+    matches_to_frame(bundle.warmup).to_csv(tmp["warmup.csv"], index=False)
+    save_prices_csv(bundle.snapshots, tmp["snapshots.csv"])
+    tmp["meta.json"].write_text(json.dumps(bundle.meta, indent=2, default=str), encoding="utf-8")
+    for name, t in tmp.items():
+        os.replace(t, d / name)
 
 
 def load_bundle(data_dir: str | Path) -> Bundle:
@@ -300,7 +307,13 @@ def run_picks(history_bundle: Bundle | None, up: Upcoming, fees: FeeModel, rules
         if not hist_df.empty:
             from .backtest import add_normalized_market
 
-            hist_df = walk_forward_pool(add_normalized_market(hist_df))
+            hist_df = add_normalized_market(hist_df)
+            # picks are priced against the PRE-MATCH line, so the pools must be trained on that line class too
+            # (the backtest frame's book_* is the closing line whenever the snapshot is at kickoff)
+            for o in ("home", "draw", "away"):
+                if f"bookpre_{o}" in hist_df:
+                    hist_df[f"book_{o}"] = hist_df[f"bookpre_{o}"]
+            hist_df = walk_forward_pool(hist_df)
             pools = fit_final_pools(hist_df)
     if pools is None:
         from .pro import prior_fit
@@ -317,6 +330,8 @@ def write_picks(res: dict, up: Upcoming, out_dir: str | Path, meta: dict) -> Pat
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    for stale in ("picks.csv", "picks_candidates.csv", "upcoming.csv"):
+        (out / stale).unlink(missing_ok=True)
     if res["portfolio"] is not None and not res["portfolio"].empty:
         res["portfolio"].to_csv(out / "picks.csv", index=False)
     if res["candidates"] is not None and not res["candidates"].empty:
@@ -344,6 +359,8 @@ def write_outputs(result: BacktestResult | None, df: pd.DataFrame, unmatched: li
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    for stale in ("joined.csv", "pro_portfolio.csv", "pro_candidates.csv", "summary.json", *[p.name for p in out.glob("bets_*.csv")]):
+        (out / stale).unlink(missing_ok=True)   # an empty result must not leave the previous run's files behind
     if not df.empty:
         df.to_csv(out / "joined.csv", index=False)
     pd.DataFrame(unmatched).to_csv(out / "unmatched_events.csv", index=False)

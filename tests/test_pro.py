@@ -189,3 +189,70 @@ def test_picks_flow_on_synthetic_upcoming(tmp_path):
     assert set(df["book_source"].dropna()) <= {"ps", "avg", "max", "b365", "bfe", "espn"}
     assert set(df["bookc_source"].dropna()) <= {"psc", "avgc", "maxc", "b365c", "bfec"}
     assert (df["snapshot_time"] < df["kickoff"]).all()
+
+
+def test_no_side_clv_and_fee_at_lot_size():
+    from rsa.fees import RobinhoodFees
+    from rsa.pro import StakingRules, build_candidates, select_portfolio, walk_forward_pool
+
+    df = _synthetic_frame(n=80)
+    for o in OUT:
+        df[f"cask_{o}"] = df[f"ask_{o}"] + 0.02   # closing quotes moved up 2 cents
+        df[f"cbid_{o}"] = df[f"bid_{o}"] + 0.02
+    df = walk_forward_pool(df, n_boot=3)
+    fees = RobinhoodFees()
+    c = build_candidates(df, fees, fill="ask")
+    no = c[c["side"] == "no"].iloc[0]
+    m = df[df["match_id"] == no["match_id"]].iloc[0]
+    o = no["outcome"]
+    assert no["price"] == pytest.approx(1 - m[f"bid_{o}"]) and no["fair"] == pytest.approx(1 - m[f"pro_{o}"])
+    # NO closing fill = 1 - closing bid; the bid rose 2c so the NO contract got cheaper at the close -> negative CLV
+    assert no["clv_close"] == pytest.approx((1 - m[f"cbid_{o}"]) - (1 - m[f"bid_{o}"])) and no["clv_close"] == pytest.approx(-0.02)
+    yes = c[c["side"] == "yes"].iloc[0]
+    my = df[df["match_id"] == yes["match_id"]].iloc[0]
+    assert yes["clv_close"] == pytest.approx(my[f"cask_{yes['outcome']}"] - my[f"ask_{yes['outcome']}"]) and yes["clv_close"] == pytest.approx(0.02)
+    rules = StakingRules(bankroll=5000, kelly_fraction=1.0, max_bet_fraction=0.05, max_day_fraction=1.0, max_bets_per_day=50,
+                         min_confidence=0, min_edge=-1, min_edge_q20=-1, min_edge_mid=-1, min_book_edge=-1, min_contracts=1,
+                         min_price=0.02, max_price=0.98, max_stale_hours=1e9)
+    sel = select_portfolio(c, rules, fees)
+    assert not sel.empty
+    for _, r in sel.iterrows():
+        n = int(r["contracts"])
+        assert r["fee"] == pytest.approx(fees.fee(r["price"], n) / n)
+        assert r["risked"] == pytest.approx(r["price"] + r["fee"]) and r["edge"] == pytest.approx(r["fair"] - r["price"] - r["fee"])
+
+
+def test_walk_forward_pool_excludes_matches_still_in_play():
+    from rsa.pro import walk_forward_pool
+
+    df = _synthetic_frame(n=160)
+    # last match of each 'day' kicks off at 23:30 UTC; first of the next day at 00:30 UTC -> still in play at training time
+    df["kickoff"] = [pd.Timestamp("2026-08-01", tz="UTC") + pd.Timedelta(days=i // 10, hours=(23.5 if i % 10 == 9 else 0.5 + (i % 10)))
+                     for i in range(len(df))]
+    out = walk_forward_pool(df, n_boot=2)
+    # on the day where fitted weights first appear, the training count must exclude the previous night's late kickoff
+    fitted = out[out["pro_n_train"] > 0]
+    assert not fitted.empty
+    first_day = fitted["kickoff"].dt.date.min()
+    first_kick = out.loc[out["kickoff"].dt.date == first_day, "kickoff"].min()
+    eligible = int((out["kickoff"] <= first_kick - pd.Timedelta(minutes=150)).sum())
+    assert int(fitted.loc[fitted["kickoff"].dt.date == first_day, "pro_n_train"].iloc[0]) == eligible
+    assert eligible < int((out["kickoff"].dt.date < first_day).sum())
+
+
+def test_season_boundary_only_after_a_real_gap():
+    from datetime import datetime, timedelta, timezone
+
+    from rsa.models import ModelSet
+    from rsa.results import Match
+
+    t0 = datetime(2026, 3, 1, 15, tzinfo=timezone.utc)
+    hist = [Match("mls", f"h{i}", t0 + timedelta(days=7 * i), "A", "B", 2, 0, True, "t") for i in range(12)]
+    soon = [Match("mls", "u1", hist[-1].kickoff + timedelta(days=7), "B", "A", None, None, False, "t")]
+    later = [Match("mls", "u2", hist[-1].kickoff + timedelta(days=80), "B", "A", None, None, False, "t")]
+    assert ModelSet.new_season_fixtures(hist, soon) == []
+    assert ModelSet.new_season_fixtures(hist, later) == later
+    ms = ModelSet().fit(hist, upcoming=soon)
+    r_soon = ms.elo.rating("A")
+    ms2 = ModelSet().fit(hist, upcoming=later)
+    assert abs(ms2.elo.rating("A") - 1500) < abs(r_soon - 1500)   # regressed toward the mean only across the gap

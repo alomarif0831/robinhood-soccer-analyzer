@@ -290,7 +290,18 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001
         if not is_frozen():
             raise
-        print(f"\nERROR: {e}", file=sys.stderr)
+        logging.getLogger(__name__).exception("fatal: %s", e)
+        try:  # the windowed build has no console: leave a trace even if logging was never configured
+            import traceback
+
+            from .hq.state import app_dir
+
+            with open(app_dir() / "crash.log", "a", encoding="utf-8") as f:
+                f.write(traceback.format_exc() + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+        if sys.stderr is not None:
+            print(f"\nERROR: {e}", file=sys.stderr)
         pause_if_interactive()
         return 1
 

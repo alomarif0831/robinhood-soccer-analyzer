@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .fees import FeeModel, NoFees
-from .pro import StakingRules, fit_final_pools, pro_backtest, walk_forward_pool
+from .pro import StakingRules, _bootstrap_roi, fit_final_pools, pro_backtest, walk_forward_pool
 
 OUTCOMES = ("home", "draw", "away")
 
@@ -265,27 +265,37 @@ def naive_bets(df: pd.DataFrame, rule: str, fees: FeeModel = NoFees(), fill: str
 
 
 def summarize_bets(bets: pd.DataFrame, n_boot: int = 2000, seed: int = 7) -> dict:
-    """ROI (profit / dollars risked) with a percentile-bootstrap 95% interval."""
+    """ROI (profit / dollars risked) with a percentile-bootstrap 95% interval, resampling whole matches
+    (several contracts of one match are correlated, so a per-bet bootstrap would be too narrow)."""
     if bets is None or bets.empty:
         return {"n": 0, "risked": 0.0, "profit": 0.0, "roi": np.nan, "roi_ci_low": np.nan, "roi_ci_high": np.nan,
                 "win_rate": np.nan, "avg_price": np.nan, "avg_edge": np.nan, "p_value_profit_le_0": np.nan}
     profit = bets["profit"].to_numpy(dtype=float)
     risked = bets["risked"].to_numpy(dtype=float)
-    rng = np.random.default_rng(seed)
     n = len(profit)
-    idx = rng.integers(0, n, size=(n_boot, n))
-    rois = profit[idx].sum(axis=1) / risked[idx].sum(axis=1)
+    groups = bets["match_id"].to_numpy() if "match_id" in bets else None
+    roi, lo, hi = _bootstrap_roi(profit, risked, n_boot=n_boot, seed=seed, groups=groups)
+    # share of cluster-bootstrap replicates with non-positive ROI
+    rng = np.random.default_rng(seed)
+    if groups is not None:
+        uniq, inv = np.unique(np.asarray(groups).astype(str), return_inverse=True)
+        gp = np.bincount(inv, weights=profit, minlength=len(uniq))
+        idx = rng.integers(0, len(uniq), size=(n_boot, len(uniq)))
+        p_le0 = float((gp[idx].sum(axis=1) <= 0).mean())
+    else:
+        idx = rng.integers(0, n, size=(n_boot, n))
+        p_le0 = float((profit[idx].sum(axis=1) <= 0).mean())
     return {
         "n": int(n),
         "risked": float(risked.sum()),
         "profit": float(profit.sum()),
-        "roi": float(profit.sum() / risked.sum()),
-        "roi_ci_low": float(np.percentile(rois, 2.5)),
-        "roi_ci_high": float(np.percentile(rois, 97.5)),
+        "roi": roi,
+        "roi_ci_low": lo,
+        "roi_ci_high": hi,
         "win_rate": float(bets["won"].mean()),
         "avg_price": float(bets["price"].mean()),
         "avg_edge": float(bets["edge"].mean()) if bets["edge"].notna().any() else np.nan,
-        "p_value_profit_le_0": float((rois <= 0).mean()),
+        "p_value_profit_le_0": p_le0,
     }
 
 
