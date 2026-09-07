@@ -107,7 +107,7 @@ class KalshiClient:
         params = {k: v for k, v in (params or {}).items() if v is not None}
         cp = self._cache_path(path, params) if cacheable else None
         if cp and cp.exists() and not self.refresh:
-            with open(cp) as f:
+            with open(cp, encoding="utf-8") as f:
                 return json.load(f)
 
         url = self.base_url + path
@@ -128,7 +128,7 @@ class KalshiClient:
             data = resp.json()
             if cp:
                 cp.parent.mkdir(parents=True, exist_ok=True)
-                with open(cp, "w") as f:
+                with open(cp, "w", encoding="utf-8") as f:
                     json.dump(data, f)
             return data
         raise KalshiError(f"GET {path}: gave up after retries")

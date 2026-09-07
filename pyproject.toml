@@ -13,11 +13,13 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "requests>=2.31",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
 auth = ["cryptography>=41"]
 dev = ["pytest>=7"]
+build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 rsa = "rsa.cli:main"

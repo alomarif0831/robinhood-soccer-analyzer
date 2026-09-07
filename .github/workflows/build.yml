@@ -1,0 +1,81 @@
+# Builds the executables on GitHub's own machines so nobody needs Python installed:
+#  - "Run workflow" in the Actions tab (or push a tag like v0.1.0) builds the
+#    Windows .exe plus macOS and Linux binaries.
+#  - Download them from the workflow run's "Artifacts" section, or from the
+#    Release page when a version was typed into the box / a tag was pushed.
+name: Build executables
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional: version to publish as a GitHub Release, e.g. v0.1.2 (leave blank to only produce artifacts)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows
+            pattern: release/*.exe
+          - os: macos-latest
+            artifact: macos
+            pattern: release/rsa-*-macos-*
+          - os: ubuntu-latest
+            artifact: linux
+            pattern: release/rsa-*-linux-*
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,build]"
+      - run: python -m pytest -q
+      - name: Stamp the version from the release tag
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        shell: bash
+        env:
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          # The executable reports this version (rsa --version) and it is in the file name.
+          python scripts/set_version.py "$TAG"
+      - name: Build
+        run: python scripts/build_exe.py
+      - name: Smoke-test the executable (full offline demo run)
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=release/rsa.exe; else exe=release/rsa; fi
+          "$exe" --version
+          "$exe" demo --data-dir smoke/data --out smoke/out --leagues epl,mls
+          test -f smoke/out/report.md
+          head -20 smoke/out/report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robinhood-soccer-analyzer-${{ matrix.artifact }}
+          path: ${{ matrix.pattern }}
+          if-no-files-found: error
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Robinhood Soccer Analyzer ${{ inputs.release_tag || github.ref_name }}
+          files: |
+            release/rsa-*

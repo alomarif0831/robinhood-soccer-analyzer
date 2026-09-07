@@ -131,7 +131,7 @@ def save_bundle(bundle: Bundle, data_dir: str | Path) -> None:
     matches_to_frame(bundle.matches).to_csv(d / "matches.csv", index=False)
     matches_to_frame(bundle.warmup).to_csv(d / "warmup.csv", index=False)
     save_prices_csv(bundle.snapshots, d / "snapshots.csv")
-    (d / "meta.json").write_text(json.dumps(bundle.meta, indent=2, default=str))
+    (d / "meta.json").write_text(json.dumps(bundle.meta, indent=2, default=str), encoding="utf-8")
 
 
 def load_bundle(data_dir: str | Path) -> Bundle:
@@ -141,7 +141,7 @@ def load_bundle(data_dir: str | Path) -> Bundle:
     matches = matches_from_frame(pd.read_csv(d / "matches.csv"))
     warmup = matches_from_frame(pd.read_csv(d / "warmup.csv")) if (d / "warmup.csv").exists() else []
     snaps = load_prices_csv(d / "snapshots.csv") if (d / "snapshots.csv").exists() else []
-    meta = json.loads((d / "meta.json").read_text()) if (d / "meta.json").exists() else {}
+    meta = json.loads((d / "meta.json").read_text(encoding="utf-8")) if (d / "meta.json").exists() else {}
     return Bundle(matches, warmup, snaps, meta)
 
 
@@ -185,7 +185,7 @@ def write_outputs(result: BacktestResult | None, df: pd.DataFrame, unmatched: li
         consistency = check_settlement_consistency(df)
         meta = dict(meta, settlement_mismatches=int(len(consistency)), unmatched_events=len(unmatched),
                     n_matches_window=len(bundle.matches), n_warmup=len(bundle.warmup), n_snapshots=len(bundle.snapshots))
-        (out / "summary.json").write_text(json.dumps(summary_json(result, meta), indent=2, default=str))
+        (out / "summary.json").write_text(json.dumps(summary_json(result, meta), indent=2, default=str), encoding="utf-8")
     text = render_markdown(result, df, unmatched, bundle, meta)
-    (out / "report.md").write_text(text)
+    (out / "report.md").write_text(text, encoding="utf-8")
     return out / "report.md"

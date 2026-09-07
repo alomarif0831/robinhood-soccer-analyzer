@@ -37,10 +37,57 @@ Fees default to Robinhood's June-2026 schedule: commission `0.10 × p × (1−p)
 (`0.05` with Gold), rounded up to the cent per order, plus a $0.01 exchange fee. `--fees kalshi`
 models trading on Kalshi directly (`0.07 × p × (1−p)`), `--fees none` shows gross numbers.
 
-## Quick start
+## Getting the .exe without touching a terminal
+
+The repository includes a GitHub Actions workflow that builds the program on GitHub's own
+Windows, macOS and Linux machines, so nobody needs Python installed:
+
+1. On GitHub open the repository → **Actions** → **Build executables** → **Run workflow**. Type a
+   version such as `v0.1.1` in the box to publish a Release with the executables attached, or leave
+   it blank to only produce downloadable artifacts. Pushing a tag such as `v0.1.1` does the same.
+2. When the run finishes (about 5 minutes), open it and download the
+   **robinhood-soccer-analyzer-windows** artifact. It contains `rsa.exe` and
+   `rsa-<version>-windows-x64.exe` (same file, versioned name). A tag push also publishes them on
+   the repository's *Releases* page.
+3. Unzip it anywhere and **double-click `rsa.exe`**. A menu appears: run the demo, fetch and
+   backtest live data, or re-analyze data fetched earlier. Reports land in a `reports/` folder
+   next to where you ran it. Windows SmartScreen may warn once because the file is unsigned:
+   *More info → Run anyway*.
+
+PowerShell users can call it directly: `.\rsa.exe run --leagues epl,laliga --data-dir data\live`.
+
+## Building the .exe yourself
+
+Requirements: Windows 10/11 and [Python 3.10+](https://www.python.org/downloads/) with
+*Add python.exe to PATH* ticked during install.
+
+```bat
+git clone https://github.com/alomarif0831/robinhood-soccer-analyzer
+cd robinhood-soccer-analyzer
+build.bat
+```
+
+`build.bat` creates a virtual environment, installs the dependencies, runs the tests, and writes
+`release\rsa.exe` (plus `release\rsa-<version>-windows-x64.exe`). On macOS/Linux run
+`./build.sh` for a native binary. PyInstaller cannot cross-compile: the Windows `.exe` must be
+built on Windows (or by the GitHub workflow above).
+
+| command | what it does |
+|---|---|
+| `build.bat` / `./build.sh` | venv + install + tests + `release/rsa[.exe]` |
+| `python scripts/build_exe.py` | just the PyInstaller step (needs `pip install -e ".[build]"`) |
+| `python scripts/set_version.py v0.1.1` | stamp a version into `pyproject.toml` and `rsa/__init__.py` |
+| `pyinstaller rsa.spec` | raw PyInstaller build to `dist/rsa[.exe]` |
+
+The executable covers everything except the optional Kalshi API-key signing (`--kalshi-key-id`),
+which needs the `cryptography` package; use the Python install for that, or build with
+`RSA_BUNDLE_CRYPTOGRAPHY=1` set and `cryptography` installed.
+
+## Quick start (Python)
 
 ```bash
-pip install -e .[dev]           # pandas, numpy, requests (+ pytest)
+pip install -e ".[dev]"         # pandas, numpy, requests, tzdata (+ pytest)
+rsa                             # no arguments -> the same menu the .exe shows
 rsa demo                        # synthetic end-to-end run, no network -> reports/demo/report.md
 rsa series                      # list Kalshi soccer series tickers (live)
 rsa run --leagues epl,laliga,bundesliga,seriea,ligue1,mls --data-dir data/live
@@ -115,7 +162,11 @@ rsa/report.py     markdown report + verdicts
 rsa/pipeline.py   collect -> save -> analyze -> write
 rsa/synth.py      synthetic raw-shaped fixtures + offline Kalshi client (used by `rsa demo`)
 rsa/cli.py        command line
-tests/            pytest suite (fees, parsing, matching, models, backtest, demo pipeline)
+rsa/interactive.py  menu shown when started without arguments (double-clicked .exe)
+scripts/          launcher.py (PyInstaller entry), build_exe.py, set_version.py
+rsa.spec          PyInstaller spec (bundles tzdata for zoneinfo on Windows)
+build.bat/.sh     one-shot local builds; .github/workflows/build.yml builds on GitHub
+tests/            pytest suite (fees, parsing, matching, models, backtest, demo pipeline, menu)
 ```
 
 Run the tests with `pytest`.

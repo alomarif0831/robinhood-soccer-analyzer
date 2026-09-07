@@ -167,10 +167,38 @@ def cmd_demo(args) -> int:
     return _analyze_and_write(bundle, args, {"synthetic": True})
 
 
-def main(argv: list[str] | None = None) -> int:
+def _utf8_stdio() -> None:
+    """Windows consoles/redirects default to the legacy code page; the report uses a few Unicode glyphs."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     return {"series": cmd_series, "fetch": cmd_fetch, "backtest": cmd_backtest, "run": cmd_run, "demo": cmd_demo}[args.cmd](args)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. With no arguments (a double-clicked .exe, or a bare `rsa`) show the menu."""
+    from .interactive import is_frozen, run_menu
+
+    _utf8_stdio()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        return run_menu(run)
+    try:
+        return run(argv)
+    except Exception as e:  # noqa: BLE001
+        if not is_frozen():
+            raise
+        print(f"\nERROR: {e}", file=sys.stderr)
+        input("Press Enter to close...")
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

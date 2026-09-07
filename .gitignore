@@ -13,3 +13,7 @@ reports/live/
 # Synthetic demo: regenerate with `rsa demo` (24 MB of raw JSON); keep only the rendered report
 data/demo/
 reports/demo/*.csv
+# PyInstaller output
+release/
+build/
+smoke/
