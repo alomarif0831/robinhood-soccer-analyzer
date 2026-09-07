@@ -20,7 +20,7 @@ The repository's GitHub Actions workflow builds everything on GitHub's own machi
 Tracker HQ, so nobody needs Python installed:
 
 1. GitHub → **Actions** → **Build executables** → **Run workflow**. Type a version such as
-   `v0.2.0` to publish a Release, or leave it blank for artifacts only. Pushing a `v*` tag does the
+   `v0.2.1` to publish a Release, or leave it blank for artifacts only. Pushing a `v*` tag does the
    same.
 2. Download from the run's **Artifacts** or the **Releases** page:
 
@@ -32,9 +32,13 @@ Tracker HQ, so nobody needs Python installed:
 | macOS (Intel) | `RobinhoodSoccerHQ-<version>-macos-x64.dmg` | same, for Intel Macs |
 | Linux | `RobinhoodSoccerHQ-<version>-linux-x64.tar.gz`, `rsa-<version>-linux-x64.tar.gz` | built on Ubuntu 22.04 (glibc 2.35+) |
 
-The builds are unsigned. Windows SmartScreen asks once (*More info → Run anyway*); macOS needs
-*System Settings → Privacy & Security → Open Anyway* once, or
-`xattr -dr com.apple.quarantine "Robinhood Soccer HQ.app"`.
+The builds are unsigned. Windows SmartScreen asks once (*More info → Run anyway*). On a Mac, open
+the DMG, drag **Robinhood Soccer HQ** onto the **Applications** alias next to it, then clear the
+quarantine flag once in Terminal (or use *System Settings → Privacy & Security → Open Anyway*):
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Robinhood Soccer HQ.app"
+```
 
 The app starts a local server on 127.0.0.1 and opens the HQ as an app-style window in Chrome or
 Edge (falling back to your default browser). Nothing is sent anywhere except the data sources

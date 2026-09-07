@@ -5,4 +5,4 @@ clear on Kalshi or Rothera) against real match results to measure whether the
 market is mispriced in any systematic way, net of fees.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

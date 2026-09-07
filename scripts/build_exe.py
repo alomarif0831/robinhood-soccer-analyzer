@@ -39,6 +39,10 @@ def main() -> int:
     release = ROOT / "release"
     release.mkdir(exist_ok=True)
     env = dict(os.environ, RSA_CLI_NAME=cli_name, RSA_GUI_NAME=gui_name, RSA_VERSION=__version__)
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "make_icon.py")], check=False, cwd=ROOT)
+    icon = ROOT / "build" / "icon" / ("icon.icns" if platform.system() == "Darwin" else "icon.ico")
+    if icon.exists():
+        env["RSA_ICON"] = str(icon)
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
            "--distpath", str(release), "--workpath", str(ROOT / "build" / "pyinstaller"), str(ROOT / "rsa.spec")]
     print("+", " ".join(cmd))

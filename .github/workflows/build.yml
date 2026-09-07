@@ -81,20 +81,25 @@ jobs:
           gui=$(ls release/RobinhoodSoccerHQ-*-macos-* | grep -v -E '\.(dmg|tar\.gz)$' | head -1)
           name=$(basename "$gui")
           stage="$(mktemp -d)/Robinhood Soccer HQ"
-          mkdir -p "$stage"
+          mkdir -p "$stage/Command line"
           cp -R "release/Robinhood Soccer HQ.app" "$stage/"
-          cp "$cli" "$stage/rsa"
-          chmod +x "$stage/rsa"
+          ln -s /Applications "$stage/Applications"
+          cp "$cli" "$stage/Command line/rsa"
+          chmod +x "$stage/Command line/rsa"
           cat > "$stage/README.txt" <<'NOTE'
           Robinhood Soccer HQ (macOS)
 
-          1. Drag "Robinhood Soccer HQ.app" into Applications (or anywhere).
-          2. Open it. The app starts a local server and opens the HQ window in Chrome/Edge (app mode) or your default browser.
-             If macOS says it cannot verify the developer: System Settings > Privacy & Security > "Open Anyway",
-             then open it again. Or, in Terminal:  xattr -dr com.apple.quarantine "Robinhood Soccer HQ.app"
-          3. Your data and reports live in ~/.robinhood-soccer-hq (shown in the app's Settings).
+          1. Drag "Robinhood Soccer HQ" onto the "Applications" folder next to it.
+          2. The app is not signed with an Apple certificate, so macOS will refuse to open it once.
+             Open Terminal (Applications > Utilities) and paste this line, then press Enter:
 
-          "rsa" next to the app is the command-line version: ./rsa --help
+                 xattr -dr com.apple.quarantine "/Applications/Robinhood Soccer HQ.app"
+
+             (Alternative: System Settings > Privacy & Security > "Open Anyway" after the first refusal.)
+          3. Open Robinhood Soccer HQ from Applications. It starts a local server and opens the HQ window
+             in Chrome/Edge (app mode) or your default browser. Data and reports live in ~/.robinhood-soccer-hq.
+
+          "Command line/rsa" is the terminal version (./rsa --help); it needs the same xattr treatment.
           NOTE
           hdiutil create -volname "Robinhood Soccer HQ" -srcfolder "$stage" -ov -format UDZO "release/$name.dmg"
           ls -la release

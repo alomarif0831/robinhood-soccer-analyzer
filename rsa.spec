@@ -38,6 +38,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 RUNTIME_OPTIONS = [("X utf8", None, "OPTION")]   # Python UTF-8 mode so console/file encoding is not the Windows code page
+ICON = os.environ.get("RSA_ICON") or None          # build/icon/icon.ico or icon.icns from scripts/make_icon.py
 
 cli = EXE(
     pyz, a.scripts, a.binaries, a.datas, RUNTIME_OPTIONS,
@@ -50,11 +51,13 @@ gui = EXE(
     name=os.environ.get("RSA_GUI_NAME", "RobinhoodSoccerHQ"),
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     console=False, disable_windowed_traceback=False,
+    icon=ICON if sys.platform in ("win32", "darwin") else None,
 )
 if sys.platform == "darwin":
     app = BUNDLE(
         gui,
         name="Robinhood Soccer HQ.app",
+        icon=ICON,
         bundle_identifier="com.alomarif.robinhoodsoccerhq",
         info_plist={"CFBundleDisplayName": "Robinhood Soccer HQ", "CFBundleShortVersionString": os.environ.get("RSA_VERSION", "0.0.0"),
                     "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0"},
