@@ -99,9 +99,27 @@ class Match:
 
 
 # ----------------------------------------------------------------------- HTTP
+# ESPN's edge (and some CDNs) answer 403 to anything that does not look like a browser.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _headers_for(url: str) -> dict[str, str]:
+    h = dict(BROWSER_HEADERS)
+    if "espn.com" in url:
+        h["Referer"] = "https://www.espn.com/"
+        h["Origin"] = "https://www.espn.com"
+    elif "football-data.co.uk" in url:
+        h["Accept"] = "text/csv, text/plain, */*"
+    return h
+
+
 def _http_get_text(url: str, session: requests.Session | None = None, timeout: float = 30) -> str:
     s = session or requests.Session()
-    r = s.get(url, timeout=timeout, headers={"User-Agent": "robinhood-soccer-hq/0.2"})
+    r = s.get(url, timeout=timeout, headers=_headers_for(url))
     r.raise_for_status()
     if r.encoding is None or r.encoding.lower() == "iso-8859-1":
         r.encoding = r.apparent_encoding or "latin-1"
@@ -196,6 +214,7 @@ def load_espn(
     refresh: bool = False,
     session: requests.Session | None = None,
     fetch: Callable[[str], str] | None = None,
+    max_consecutive_failures: int = 5,
 ) -> list[Match]:
     """All ESPN matches for ``league`` with kickoff dates in [start, end] (one request per day)."""
     fetch = fetch or (lambda url: _http_get_text(url, session))
@@ -203,13 +222,21 @@ def load_espn(
     # ESPN groups fixtures by local (US) date; late-UTC kickoffs can land a day later, so request one
     # day either side and keep only fixtures whose UTC kickoff date is inside the window.
     day = start - timedelta(days=1)
+    failures = 0
     while day <= end + timedelta(days=1):
         url = espn_scoreboard_url(league.espn, day)
         cf = Path(cache_dir) / "espn" / league.key / f"{day:%Y%m%d}.json" if cache_dir else None
         try:
             text = _cached_text(url, cf, refresh, fetch)
+            failures = 0
         except Exception as e:  # noqa: BLE001 - keep going for other days
-            log.warning("ESPN %s %s failed: %s", league.key, day, e)
+            failures += 1
+            if failures <= 3:
+                log.warning("ESPN %s %s failed: %s", league.key, day, e)
+            if failures >= max_consecutive_failures:
+                log.warning("ESPN %s: %d requests in a row failed; giving up on ESPN for this league "
+                            "(results will come from football-data.co.uk or the venue's settlements)", league.key, failures)
+                break
             day += timedelta(days=1)
             continue
         for m in parse_espn_scoreboard(json.loads(text), league.key):

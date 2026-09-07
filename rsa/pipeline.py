@@ -14,7 +14,7 @@ import pandas as pd
 from .backtest import BacktestResult, run_backtest
 from .config import FDCOUK_SEASON, FDCOUK_WARMUP_SEASONS, League, window_start_ts
 from .fees import FeeModel
-from .kalshi import KalshiClient, build_open_snapshots, build_snapshots
+from .kalshi import KalshiClient, build_open_snapshots, build_snapshots, matches_from_settlements
 from .matching import check_settlement_consistency, join_snapshots, matched_frame
 from .models import ModelSet, walk_forward
 from .prices import PriceSnapshot, load_prices_csv, save_prices_csv
@@ -112,6 +112,13 @@ def collect(
                 log.warning("Kalshi %s failed: %s", lg.kalshi_series, e)
                 markets = []
             info["kalshi_markets"] = len(markets)
+            if not lg_matches and markets:
+                lg_matches = [m for m in matches_from_settlements(markets, lg.key)
+                              if m.kickoff and start <= m.kickoff.date() <= end]
+                info["from_settlements"] = len(lg_matches)
+                log.warning("%s: no results feed reachable; using %d results reconstructed from the venue's settlements "
+                            "(no scorelines or bookmaker odds, home/away inferred from titles)", lg.key, len(lg_matches))
+                matches.extend(lg_matches)
             lg_snaps = build_snapshots(kalshi, lg.key, lg.kalshi_series, markets, _kickoff_lookup(lg_matches),
                                        minutes_before_kickoff, use_candles)
             lg_snaps = [s for s in lg_snaps if s.kickoff is None or start <= s.kickoff.date() <= end]

@@ -328,6 +328,51 @@ def group_by_event(markets: Iterable[dict]) -> dict[str, list[dict]]:
     return events
 
 
+# ------------------------------------------------------------ settlement fallback
+def matches_from_settlements(markets: list[dict], league_key: str):
+    """Rebuild fixtures and results from settled three-way markets when no results feed is available.
+
+    The winner is the outcome whose market settled YES (a settled TIE means a draw). Kickoff is
+    approximated as the market close time minus 135 minutes (Kalshi closes game markets a little
+    after full time). Home/away orientation comes from the event title: "A vs B" lists the home
+    side first, "A at B" the away side first; such rows carry ``extra["orientation_inferred"]``.
+    """
+    from .results import Match
+    from .teams import parse_matchup
+
+    out = []
+    for event_ticker, ms in group_by_event(markets).items():
+        teams = event_teams(ms)
+        if not teams or any(market_result(m) is None for m in ms) or len(ms) != 3:
+            continue
+        title = re.sub(r"[?]+$", "", (ms[0].get("title") or "").strip())
+        parsed = parse_matchup(title)
+        if parsed:
+            home, away = parsed[0], parsed[1]
+            home = re.sub(r"\s+(match\s+)?(winner|result|moneyline|game|outcome)\s*$", "", home, flags=re.IGNORECASE).strip()
+            away = re.sub(r"\s+(match\s+)?(winner|result|moneyline|game|outcome)\s*$", "", away, flags=re.IGNORECASE).strip()
+        else:
+            home, away = teams
+        winners = [outcome_label(m) for m in ms if market_result(m) == "yes"]
+        if len(winners) != 1:
+            continue
+        w = winners[0]
+        if w == "TIE":
+            hg, ag = 1, 1
+        elif w == home:
+            hg, ag = 1, 0
+        elif w == away:
+            hg, ag = 0, 1
+        else:
+            continue
+        close = market_close_time(ms[0])
+        kickoff = (close - timedelta(minutes=135)) if close else None
+        out.append(Match(league=league_key, match_id=f"kalshi:{event_ticker}", kickoff=kickoff, home=home, away=away,
+                         home_goals=hg, away_goals=ag, completed=True, source="kalshi-settlement",
+                         extra={"orientation_inferred": True, "scoreline_unknown": True}))
+    return out
+
+
 # ------------------------------------------------------------------ snapshots
 def snapshot_from_trades(trades: list[dict], at: datetime, window_minutes: int = 180) -> dict:
     """Pre-``at`` price summary from a trade tape: last/first trade, VWAP over a window, volume."""

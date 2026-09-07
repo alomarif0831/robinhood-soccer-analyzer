@@ -20,7 +20,7 @@ The repository's GitHub Actions workflow builds everything on GitHub's own machi
 Tracker HQ, so nobody needs Python installed:
 
 1. GitHub → **Actions** → **Build executables** → **Run workflow**. Type a version such as
-   `v0.2.1` to publish a Release, or leave it blank for artifacts only. Pushing a `v*` tag does the
+   `v0.2.2` to publish a Release, or leave it blank for artifacts only. Pushing a `v*` tag does the
    same.
 2. Download from the run's **Artifacts** or the **Releases** page:
 

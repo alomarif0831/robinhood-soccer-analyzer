@@ -111,3 +111,47 @@ def test_american_to_decimal():
     assert american_to_decimal(100) == 2.0
     assert american_to_decimal(-200) == 1.5
     assert american_to_decimal("x") is None
+
+
+def test_browser_headers_and_espn_referer():
+    from rsa.results import BROWSER_HEADERS, _headers_for
+
+    h = _headers_for("https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=20260822")
+    assert h["User-Agent"].startswith("Mozilla/5.0") and h["Referer"] == "https://www.espn.com/"
+    assert "python" not in BROWSER_HEADERS["User-Agent"].lower()
+    assert _headers_for("https://www.football-data.co.uk/mmz4281/2627/E0.csv")["Accept"].startswith("text/csv")
+
+
+def test_load_espn_gives_up_after_consecutive_failures():
+    from datetime import date
+
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        raise RuntimeError("403 Client Error: Forbidden")
+
+    ms = load_espn(LEAGUES["epl"], date(2026, 7, 20), date(2026, 9, 6), fetch=fetch, max_consecutive_failures=5)
+    assert ms == [] and len(calls) == 5   # not one request per day of the window
+
+
+def test_matches_from_settlements_reconstructs_results():
+    from rsa.kalshi import matches_from_settlements
+
+    def mk(event, title, sub, suffix, result, close):
+        return {"ticker": f"{event}-{suffix}", "event_ticker": event, "title": title, "yes_sub_title": sub, "result": result,
+                "close_time": close}
+
+    ms = [mk("E1", "Arsenal vs Wolves Winner?", "Arsenal", "ARS", "yes", "2026-08-22T16:15:00Z"),
+          mk("E1", "Arsenal vs Wolves Winner?", "Tie", "TIE", "no", "2026-08-22T16:15:00Z"),
+          mk("E1", "Arsenal vs Wolves Winner?", "Wolves", "WOL", "no", "2026-08-22T16:15:00Z"),
+          mk("E2", "Inter Miami at LA Galaxy Winner?", "Inter Miami", "MIA", "no", "2026-08-23T04:15:00Z"),
+          mk("E2", "Inter Miami at LA Galaxy Winner?", "Tie", "TIE", "yes", "2026-08-23T04:15:00Z"),
+          mk("E2", "Inter Miami at LA Galaxy Winner?", "LA Galaxy", "LAG", "no", "2026-08-23T04:15:00Z"),
+          mk("E3", "Open vs Market", "Open", "OPE", "", "2026-08-23T04:15:00Z")]
+    out = {m.match_id: m for m in matches_from_settlements(ms, "epl")}
+    assert set(out) == {"kalshi:E1", "kalshi:E2"}
+    a = out["kalshi:E1"]
+    assert (a.home, a.away, a.result) == ("Arsenal", "Wolves", "home") and a.kickoff.hour == 14 and a.completed
+    b = out["kalshi:E2"]
+    assert (b.home, b.away, b.result) == ("LA Galaxy", "Inter Miami", "draw") and b.extra["orientation_inferred"]
