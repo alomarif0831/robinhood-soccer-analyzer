@@ -37,6 +37,11 @@ class PriceSnapshot:
     kickoff: datetime | None = None
     volume: float | None = None
     result: str | None = None     # "yes" / "no" / None (unsettled/unknown)
+    close_price: float | None = None    # last trade at kickoff (the venue's closing line)
+    close_bid: float | None = None      # top of book at kickoff, when candles are available
+    close_ask: float | None = None
+    open_price: float | None = None     # first trade after the market opened
+    last_trade_time: datetime | None = None
     extra: dict = field(default_factory=dict)
 
     @property
@@ -46,10 +51,16 @@ class PriceSnapshot:
     def to_row(self) -> dict:
         d = asdict(self)
         d.pop("extra", None)
-        for k in ("snapshot_time", "kickoff"):
+        for k in ("snapshot_time", "kickoff", "last_trade_time"):
             v = getattr(self, k)
             d[k] = v.isoformat() if v else None
         return d
+
+    @property
+    def spread(self) -> float | None:
+        if self.yes_bid is None or self.yes_ask is None:
+            return None
+        return max(0.0, self.yes_ask - self.yes_bid)
 
 
 def parse_price(v) -> float | None:
@@ -92,6 +103,7 @@ def parse_time(v) -> datetime | None:
 CSV_COLUMNS = (
     "venue", "league", "event_id", "team_a", "team_b", "outcome_label", "market_ticker",
     "price", "yes_bid", "yes_ask", "snapshot_time", "kickoff", "volume", "result",
+    "close_price", "close_bid", "close_ask", "open_price", "last_trade_time",
 )
 
 
@@ -123,6 +135,11 @@ def load_prices_csv(path: str | Path) -> list[PriceSnapshot]:
                     kickoff=parse_time(row.get("kickoff")),
                     volume=float(row["volume"]) if row.get("volume") else None,
                     result=(row.get("result") or None),
+                    close_price=parse_price(row.get("close_price")),
+                    close_bid=parse_price(row.get("close_bid")),
+                    close_ask=parse_price(row.get("close_ask")),
+                    open_price=parse_price(row.get("open_price")),
+                    last_trade_time=parse_time(row.get("last_trade_time")),
                 )
             )
     return out

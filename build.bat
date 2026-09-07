@@ -1,5 +1,5 @@
 @echo off
-REM Builds release\rsa.exe (and release\rsa-<version>-windows-x64.exe) on this PC.
+REM Builds Robinhood Soccer HQ: release\RobinhoodSoccerHQ.exe (the app) and release\rsa.exe (CLI) on this PC.
 REM Needs Python 3.10+ from python.org with "Add python.exe to PATH" ticked.
 REM No Python? Use GitHub instead: Actions -> "Build executables" -> Run workflow.
 setlocal
@@ -27,7 +27,7 @@ python scripts\build_exe.py
 if errorlevel 1 goto :fail
 
 echo.
-echo Done: release\rsa.exe  (double-click it for the menu, or run it from PowerShell: .\release\rsa.exe --help)
+echo Done: release\RobinhoodSoccerHQ.exe (double-click to open the HQ) and release\rsa.exe (command line)
 pause
 exit /b 0
 

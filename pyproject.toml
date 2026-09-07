@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "robinhood-soccer-analyzer"
-version = "0.1.0"
-description = "Backtest Robinhood/Kalshi soccer prediction-market prices against match results to look for a betting edge."
+name = "robinhood-soccer-hq"
+version = "0.2.0"
+description = "Robinhood Soccer HQ: backtest Robinhood/Kalshi soccer contracts against real results and rank upcoming bets by confidence."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -23,9 +23,13 @@ build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 rsa = "rsa.cli:main"
+soccer-hq = "rsa.cli:main"
 
 [tool.setuptools]
-packages = ["rsa"]
+packages = ["rsa", "rsa.hq"]
+
+[tool.setuptools.package-data]
+rsa = ["hq/ui/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

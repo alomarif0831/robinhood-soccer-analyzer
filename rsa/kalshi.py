@@ -66,7 +66,7 @@ class KalshiClient:
         self.min_interval = 1.0 / requests_per_second if requests_per_second else 0.0
         self.timeout = timeout
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", "robinhood-soccer-analyzer/0.1")
+        self.session.headers.setdefault("User-Agent", "robinhood-soccer-hq/0.2")
         self._last_call = 0.0
         self._private_key = None
         self.key_id = key_id
@@ -203,6 +203,10 @@ class KalshiClient:
                 out.append(m)
         return sorted(out, key=lambda m: (market_close_time(m) or datetime.max.replace(tzinfo=timezone.utc), m["ticker"]))
 
+    def open_markets(self, series_ticker: str) -> list[dict]:
+        """Currently tradeable markets in a series (upcoming and in-play games)."""
+        return self.list_markets(series_ticker, status="open")
+
     # ---------------------------------------------------------------- prices
     def trades(self, ticker: str, min_ts: int | None = None, max_ts: int | None = None) -> list[dict]:
         params = {"ticker": ticker, "min_ts": min_ts, "max_ts": max_ts}
@@ -326,9 +330,10 @@ def group_by_event(markets: Iterable[dict]) -> dict[str, list[dict]]:
 
 # ------------------------------------------------------------------ snapshots
 def snapshot_from_trades(trades: list[dict], at: datetime, window_minutes: int = 180) -> dict:
-    """Pre-``at`` price summary from a trade tape: last trade, VWAP over a window, volume."""
+    """Pre-``at`` price summary from a trade tape: last/first trade, VWAP over a window, volume."""
     last = None
     last_t = None
+    first = None
     vol = 0.0
     wsum = 0.0
     wvol = 0.0
@@ -338,12 +343,14 @@ def snapshot_from_trades(trades: list[dict], at: datetime, window_minutes: int =
         if ts is None or p is None or ts > at:
             continue
         n = float(t.get("count_fp") or t.get("count") or 1)
+        if first is None:
+            first = p
         last, last_t = p, ts
         vol += n
         if (at - ts).total_seconds() <= window_minutes * 60:
             wsum += p * n
             wvol += n
-    return {"last": last, "last_time": last_t, "vwap": (wsum / wvol) if wvol else None, "volume": vol}
+    return {"last": last, "last_time": last_t, "first": first, "vwap": (wsum / wvol) if wvol else None, "volume": vol}
 
 
 def snapshot_from_candles(candles: list[dict], at: datetime) -> dict:
@@ -382,8 +389,10 @@ def build_snapshots(
     ``kickoff_lookup(team_a, team_b, close_time) -> datetime | None`` supplies the
     true kickoff from the results source; without it the snapshot is taken at
     the market's close time minus ~2h (Kalshi keeps game markets open in-play,
-    so close time is not kickoff). Snapshots use the last trade at or before
-    ``kickoff - minutes_before_kickoff``.
+    so close time is not kickoff). The entry snapshot uses the last trade at or
+    before ``kickoff - minutes_before_kickoff``; ``close_price`` is the last
+    trade at kickoff itself, so closing-line value can be measured when the
+    entry is earlier than kickoff.
     """
     snaps: list[PriceSnapshot] = []
     for event_ticker, ms in group_by_event(markets).items():
@@ -401,12 +410,14 @@ def build_snapshots(
                 continue
             at = kickoff - timedelta(minutes=minutes_before_kickoff)
             open_ts = _as_ts(m.get("open_time")) or int(at.timestamp()) - 14 * 86400
-            trades = client.trades(m["ticker"], min_ts=open_ts, max_ts=int(at.timestamp()) + 1)
+            trades = client.trades(m["ticker"], min_ts=open_ts, max_ts=int(kickoff.timestamp()) + 1)
             ts = snapshot_from_trades(trades, at)
-            cs = {}
+            closing = snapshot_from_trades(trades, kickoff) if at < kickoff else ts
+            cs, ccs = {}, {}
             if use_candles:
-                candles = client.candlesticks(series_ticker, m["ticker"], open_ts, int(at.timestamp()) + 3600)
+                candles = client.candlesticks(series_ticker, m["ticker"], open_ts, int(kickoff.timestamp()) + 3600)
                 cs = snapshot_from_candles(candles, at)
+                ccs = snapshot_from_candles(candles, kickoff) if at < kickoff else cs
             price = ts["last"] if ts["last"] is not None else cs.get("price")
             snaps.append(
                 PriceSnapshot(
@@ -424,8 +435,67 @@ def build_snapshots(
                     kickoff=kickoff,
                     volume=ts["volume"],
                     result=market_result(m),
-                    extra={"vwap_3h": ts["vwap"], "last_trade_time": ts["last_time"].isoformat() if ts["last_time"] else None,
-                           "market_volume": m.get("volume"), "close_time": close.isoformat() if close else None},
+                    close_price=closing["last"] if closing["last"] is not None else price,
+                    close_bid=ccs.get("yes_bid"),
+                    close_ask=ccs.get("yes_ask"),
+                    open_price=ts["first"],
+                    last_trade_time=ts["last_time"],
+                    extra={"vwap_3h": ts["vwap"], "market_volume": m.get("volume"),
+                           "close_time": close.isoformat() if close else None},
+                )
+            )
+    return snaps
+
+
+def build_open_snapshots(
+    client: KalshiClient,
+    league_key: str,
+    series_ticker: str,
+    markets: list[dict],
+    kickoff_lookup=None,
+    now: datetime | None = None,
+    with_last_trade: bool = True,
+) -> list[PriceSnapshot]:
+    """Snapshots of OPEN markets (upcoming matches) from the market objects' live quotes.
+
+    ``price`` is the last trade if any, else the bid/ask mid; ``yes_bid``/``yes_ask``
+    are the current top of book. The most recent trade time is fetched (one small
+    request per market) so stale prices can be discounted.
+    """
+    now = now or datetime.now(timezone.utc)
+    snaps: list[PriceSnapshot] = []
+    for event_ticker, ms in group_by_event(markets).items():
+        teams = event_teams(ms)
+        if not teams:
+            continue
+        team_a, team_b = teams
+        close = market_close_time(ms[0])
+        kickoff = kickoff_lookup(team_a, team_b, close) if kickoff_lookup else None
+        for m in ms:
+            bid, ask, last = market_price(m, "yes_bid"), market_price(m, "yes_ask"), market_price(m, "last_price")
+            if last is None or last <= 0:
+                last = (bid + ask) / 2 if (bid is not None and ask is not None) else None
+            last_time = None
+            first = None
+            if with_last_trade:
+                try:
+                    data = client.get("/markets/trades", {"ticker": m["ticker"], "limit": 100}, cacheable=False)
+                    tape = data.get("trades", []) or []
+                    times = [parse_time(t.get("created_time")) for t in tape]
+                    times = [t for t in times if t]
+                    last_time = max(times) if times else None
+                    if tape:
+                        oldest = min(tape, key=lambda t: parse_time(t.get("created_time")) or now)
+                        first = trade_yes_price(oldest)
+                except KalshiError as e:
+                    log.info("trades unavailable for %s: %s", m["ticker"], e)
+            snaps.append(
+                PriceSnapshot(
+                    venue="kalshi", league=league_key, event_id=event_ticker, team_a=team_a, team_b=team_b,
+                    outcome_label=outcome_label(m), market_ticker=m["ticker"], price=last, yes_bid=bid, yes_ask=ask,
+                    snapshot_time=now, kickoff=kickoff, volume=float(m.get("volume") or 0), result=None,
+                    open_price=first, last_trade_time=last_time,
+                    extra={"open_interest": m.get("open_interest"), "close_time": close.isoformat() if close else None},
                 )
             )
     return snaps

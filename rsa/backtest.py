@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .fees import FeeModel, NoFees
+from .pro import StakingRules, fit_final_pools, pro_backtest, walk_forward_pool
 
 OUTCOMES = ("home", "draw", "away")
 
@@ -325,14 +326,16 @@ class BacktestResult:
     bets: dict[str, pd.DataFrame] = field(default_factory=dict)
     breakdowns: dict[str, pd.DataFrame] = field(default_factory=dict)
     frame: pd.DataFrame | None = None
+    pro: dict = field(default_factory=dict)
 
 
 def run_backtest(df: pd.DataFrame, fees: FeeModel, min_edge: float = 0.03,
-                 fair_sources: tuple[str, ...] = ("book", "elo", "poisson", "blend"), fill: str = "ask",
-                 slippage: float = 0.0) -> BacktestResult:
+                 fair_sources: tuple[str, ...] = ("book", "elo", "poisson", "blend", "pro"), fill: str = "ask",
+                 slippage: float = 0.0, rules: StakingRules | None = None) -> BacktestResult:
     df = add_normalized_market(df)
     if has_probs(df, "book").any() and has_probs(df, "poisson").any():
         df = add_blend(df, "poisson", "book", 0.3, "blend")
+    df = walk_forward_pool(df)
     sources = [s for s in fair_sources if has_probs(df, s).any()]
     res = BacktestResult(
         n_matches=int(df["result"].isin(OUTCOMES).sum()),
@@ -359,4 +362,12 @@ def run_backtest(df: pd.DataFrame, fees: FeeModel, min_edge: float = 0.03,
         res.breakdowns[f"{s}_by_outcome"] = bets_breakdown(bets, "outcome")
         res.breakdowns[f"{s}_by_side"] = bets_breakdown(bets, "side")
         res.breakdowns[f"{s}_by_league"] = bets_breakdown(bets, "league")
+    rules = rules or StakingRules(min_edge=min_edge)
+    pro = pro_backtest(df, fees, rules, fill)
+    pools = fit_final_pools(df, n_boot=0)
+    pro["pool_weights"] = {k: {"weights": v.weights, "intercepts": [round(float(x), 3) for x in v.b[0]], "n_train": v.n_train}
+                           for k, v in pools.items()}
+    pro["rules"] = rules
+    res.pro = pro
+    res.frame = pro["frame"]
     return res

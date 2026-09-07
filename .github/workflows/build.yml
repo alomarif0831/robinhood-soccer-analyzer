@@ -1,6 +1,7 @@
 # Builds the executables on GitHub's own machines so nobody needs Python installed:
 #  - "Run workflow" in the Actions tab (or push a tag like v0.1.0) builds the
-#    Windows .exe, macOS .dmg files (Apple Silicon + Intel) and a Linux binary.
+#    Windows .exe files (the Robinhood Soccer HQ app + the rsa CLI), macOS .dmg files
+#    (Apple Silicon + Intel, each with "Robinhood Soccer HQ.app") and Linux binaries.
 #  - Download them from the workflow run's "Artifacts" section, or from the
 #    Release page when a version was typed into the box / a tag was pushed.
 name: Build executables
@@ -37,7 +38,7 @@ jobs:
             optional: true
           - os: ubuntu-22.04   # oldest supported runner: the binary needs this glibc (2.35) or newer
             artifact: linux
-            pattern: release/rsa-*-linux-*.tar.gz
+            pattern: release/*-linux-*.tar.gz
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional == true }}
     steps:
@@ -65,56 +66,51 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ "$RUNNER_OS" = "Windows" ]; then exe=release/rsa.exe; else exe=release/rsa; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=release/rsa.exe; gui=release/RobinhoodSoccerHQ.exe; else exe=release/rsa; gui=release/RobinhoodSoccerHQ; fi
           "$exe" --version
           "$exe" demo --data-dir smoke/data --out smoke/out --leagues epl,mls
-          test -f smoke/out/report.md
+          test -f smoke/out/report.md && test -f smoke/out/picks.md
           head -20 smoke/out/report.md
+          RSA_HOME=smoke/home "$gui" hq --smoke
       - name: Package as .dmg (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -e
-          bin=$(ls release/rsa-*-macos-* | grep -v -E '\.(dmg|tar\.gz)$' | head -1)
-          name=$(basename "$bin")
-          stage="$(mktemp -d)/Robinhood Soccer Analyzer"
+          cli=$(ls release/rsa-*-macos-* | grep -v -E '\.(dmg|tar\.gz)$' | head -1)
+          gui=$(ls release/RobinhoodSoccerHQ-*-macos-* | grep -v -E '\.(dmg|tar\.gz)$' | head -1)
+          name=$(basename "$gui")
+          stage="$(mktemp -d)/Robinhood Soccer HQ"
           mkdir -p "$stage"
-          cp "$bin" "$stage/rsa"
+          cp -R "release/Robinhood Soccer HQ.app" "$stage/"
+          cp "$cli" "$stage/rsa"
           chmod +x "$stage/rsa"
-          # Double-clickable launcher: .command files open in Terminal.
-          cat > "$stage/Run Robinhood Soccer Analyzer.command" <<'LAUNCHER'
-          #!/bin/bash
-          cd "$(dirname "$0")"
-          xattr -d com.apple.quarantine ./rsa 2>/dev/null || true
-          ./rsa
-          LAUNCHER
-          chmod +x "$stage/Run Robinhood Soccer Analyzer.command"
           cat > "$stage/README.txt" <<'NOTE'
-          Robinhood Soccer Analyzer (macOS)
+          Robinhood Soccer HQ (macOS)
 
-          1. Drag this folder anywhere (e.g. Applications or your Desktop).
-          2. Double-click "Run Robinhood Soccer Analyzer.command". A Terminal window opens with the menu.
+          1. Drag "Robinhood Soccer HQ.app" into Applications (or anywhere).
+          2. Open it. The app starts a local server and opens the HQ window in Chrome/Edge (app mode) or your default browser.
              If macOS says it cannot verify the developer: System Settings > Privacy & Security > "Open Anyway",
-             then double-click it again. Or, in Terminal:  xattr -d com.apple.quarantine rsa && ./rsa
-          3. Reports are written to a "reports" folder next to the program.
+             then open it again. Or, in Terminal:  xattr -dr com.apple.quarantine "Robinhood Soccer HQ.app"
+          3. Your data and reports live in ~/.robinhood-soccer-hq (shown in the app's Settings).
 
-          Command line: ./rsa --help
+          "rsa" next to the app is the command-line version: ./rsa --help
           NOTE
-          hdiutil create -volname "Robinhood Soccer Analyzer" -srcfolder "$stage" -ov -format UDZO "release/$name.dmg"
+          hdiutil create -volname "Robinhood Soccer HQ" -srcfolder "$stage" -ov -format UDZO "release/$name.dmg"
           ls -la release
       - name: Package as .tar.gz (Linux keeps the executable bit only inside an archive)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           cd release
-          for f in rsa-*-linux-*; do
+          for f in rsa-*-linux-* RobinhoodSoccerHQ-*-linux-*; do
             case "$f" in *.tar.gz) continue;; esac
             tar czf "$f.tar.gz" "$f"
           done
           ls -la
       - uses: actions/upload-artifact@v4
         with:
-          name: robinhood-soccer-analyzer-${{ matrix.artifact }}
+          name: robinhood-soccer-hq-${{ matrix.artifact }}
           path: ${{ matrix.pattern }}
           if-no-files-found: error
 
@@ -127,7 +123,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: robinhood-soccer-analyzer-*
+          pattern: robinhood-soccer-hq-*
           merge-multiple: true
           path: release
       - run: ls -la release
@@ -136,8 +132,10 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          name: Robinhood Soccer Analyzer ${{ inputs.release_tag || github.ref_name }}
+          name: Robinhood Soccer HQ ${{ inputs.release_tag || github.ref_name }}
           files: |
+            release/RobinhoodSoccerHQ-*.exe
             release/rsa-*.exe
-            release/rsa-*.dmg
+            release/RobinhoodSoccerHQ-*.dmg
+            release/RobinhoodSoccerHQ-*.tar.gz
             release/rsa-*.tar.gz

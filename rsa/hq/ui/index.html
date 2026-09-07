@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robinhood Soccer HQ</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#4adea0" stroke-width="1.6"/><path d="M7 2.2 L9.4 4 L8.5 6.8 H5.5 L4.6 4 Z" fill="#4adea0"/></svg></span>Robinhood Soccer HQ</div>
+    <nav class="tabs" aria-label="Sections" id="tabs"></nav>
+    <div class="spacer"></div>
+    <div class="status" id="status"></div>
+    <div class="row" id="actions"></div>
+  </header>
+  <div class="main">
+    <div class="content" id="view"></div>
+    <aside class="drawer" id="drawer" hidden></aside>
+  </div>
+  <div class="activity" id="activity" hidden><div class="activity-head"><b>Activity</b><span class="spacer"></span><button class="btn sm ghost" id="activity-close">Hide</button></div><pre id="activity-log"></pre></div>
+  <div class="toasts" id="toasts"></div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

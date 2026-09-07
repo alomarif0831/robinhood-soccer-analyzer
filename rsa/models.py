@@ -34,20 +34,26 @@ class Elo:
         self.k, self.home_adv, self.nu, self.initial = k, home_adv, nu, initial
         self.ratings: dict[str, float] = {}
         self.games: dict[str, int] = defaultdict(int)
+        self.home_adv_by_league: dict[str, float] = {}
+        self.league_of: dict[str, str] = {}
 
     def rating(self, team: str) -> float:
         return self.ratings.get(canonical(team), self.initial)
 
-    def predict(self, home: str, away: str, neutral: bool = False) -> Probs:
-        rh = self.rating(home) + (0.0 if neutral else self.home_adv)
+    def _home_adv(self, league: str | None) -> float:
+        return self.home_adv_by_league.get(league, self.home_adv) if league else self.home_adv
+
+    def predict(self, home: str, away: str, neutral: bool = False, league: str | None = None) -> Probs:
+        rh = self.rating(home) + (0.0 if neutral else self._home_adv(league))
         ra = self.rating(away)
         ph, pa = 10 ** (rh / 400), 10 ** (ra / 400)
         d = self.nu * math.sqrt(ph * pa)
         tot = ph + pa + d
         return ph / tot, d / tot, pa / tot
 
-    def update(self, home: str, away: str, home_goals: int, away_goals: int, neutral: bool = False) -> float:
-        p_h, p_d, _ = self.predict(home, away, neutral)
+    def update(self, home: str, away: str, home_goals: int, away_goals: int, neutral: bool = False,
+               league: str | None = None) -> float:
+        p_h, p_d, _ = self.predict(home, away, neutral, league)
         expected = p_h + 0.5 * p_d
         actual = 1.0 if home_goals > away_goals else 0.5 if home_goals == away_goals else 0.0
         gd = abs(home_goals - away_goals)
@@ -58,12 +64,58 @@ class Elo:
         self.ratings[a] = self.rating(away) - delta
         self.games[h] += 1
         self.games[a] += 1
+        if league:
+            self.league_of[h] = league
+            self.league_of[a] = league
         return delta
 
     def fit(self, matches: Iterable[Match]) -> "Elo":
         for m in sorted((x for x in matches if x.completed), key=lambda x: x.kickoff or datetime.min.replace(tzinfo=timezone.utc)):
-            self.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")))
+            self.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")), m.league)
         return self
+
+    def calibrate_home_advantage(self, matches: list[Match], grid: tuple[float, ...] = tuple(range(0, 125, 10))) -> dict[str, float]:
+        """Per-league home advantage so the walk-forward predicted home-win share matches the observed share."""
+        by_league: dict[str, list[Match]] = {}
+        for m in matches:
+            if m.completed and m.kickoff:
+                by_league.setdefault(m.league, []).append(m)
+        for lg, ms in by_league.items():
+            if len(ms) < 60:
+                continue
+            ms.sort(key=lambda x: x.kickoff)
+            observed = sum(1 for m in ms if m.home_goals > m.away_goals) / len(ms)
+            best = None
+            for h in grid:
+                trial = Elo(self.k, h, self.nu, self.initial)
+                pred = 0.0
+                for m in ms:
+                    pred += trial.predict(m.home, m.away, bool(m.extra.get("neutral")))[0]
+                    trial.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")))
+                gap = abs(pred / len(ms) - observed)
+                if best is None or gap < best[0]:
+                    best = (gap, h)
+            self.home_adv_by_league[lg] = float(best[1])
+        return self.home_adv_by_league
+
+    def season_boundary(self, upcoming: Iterable[Match], regress: float = 0.75) -> None:
+        """New season: regress every rating toward its league mean and seed unseen (promoted) teams
+        at the mean of the three lowest-rated teams of that league (a proxy for the relegated sides)."""
+        by_league: dict[str, list[str]] = {}
+        for t, lg in self.league_of.items():
+            by_league.setdefault(lg, []).append(t)
+        means = {lg: sum(self.ratings[t] for t in ts) / len(ts) for lg, ts in by_league.items() if ts}
+        bottoms = {lg: sorted(self.ratings[t] for t in ts)[:3] for lg, ts in by_league.items() if ts}
+        for lg, ts in by_league.items():
+            for t in ts:
+                self.ratings[t] = means[lg] + regress * (self.ratings[t] - means[lg])
+        for m in upcoming:
+            for team in (m.home, m.away):
+                key = canonical(team)
+                if key not in self.ratings and m.league in bottoms and bottoms[m.league]:
+                    b = bottoms[m.league]
+                    self.ratings[key] = means[m.league] + regress * (sum(b) / len(b) - means[m.league])
+                    self.league_of[key] = m.league
 
 
 class PoissonModel:
@@ -163,18 +215,48 @@ def blend(a: Probs, b: Probs, w: float) -> Probs:
     return tuple(x / s for x in p)  # type: ignore[return-value]
 
 
+class ModelSet:
+    """Elo (per-league home advantage, season-boundary regression) + one Poisson model per league."""
+
+    def __init__(self, elo: Elo | None = None):
+        self.elo = elo or Elo()
+        self.poisson: dict[str, PoissonModel] = {}
+
+    def fit(self, history: list[Match], as_of: datetime | None = None, upcoming: list[Match] | None = None) -> "ModelSet":
+        hist = sorted([m for m in history if m.completed and m.kickoff], key=lambda m: m.kickoff)
+        self.elo.calibrate_home_advantage(hist)
+        self.elo.fit(hist)
+        if upcoming:
+            self.elo.season_boundary(upcoming)
+        self.refit_poisson(hist, as_of)
+        return self
+
+    def refit_poisson(self, history: list[Match], as_of: datetime | None = None) -> None:
+        by_league: dict[str, list[Match]] = {}
+        for m in history:
+            by_league.setdefault(m.league, []).append(m)
+        for lg, ms in by_league.items():
+            self.poisson[lg] = PoissonModel().fit(ms, as_of=as_of)
+
+    def predict(self, m: Match) -> dict[str, Probs]:
+        neutral = bool(m.extra.get("neutral"))
+        pm = self.poisson.get(m.league) or PoissonModel()
+        return {"elo": self.elo.predict(m.home, m.away, neutral, m.league), "poisson": pm.predict(m.home, m.away, neutral)}
+
+
 def walk_forward(matches_window: list[Match], warmup: list[Match], elo: Elo | None = None,
                  poisson: PoissonModel | None = None) -> dict[str, dict[str, Probs]]:
     """Predict every window match using only earlier results (warm-up + earlier window matches).
 
-    Returns ``{match_id: {"elo": (h,d,a), "poisson": (h,d,a)}}``. The Poisson
-    model is refitted once per distinct kickoff date.
+    Returns ``{match_id: {"elo": (h,d,a), "poisson": (h,d,a)}}``. Elo updates after
+    every match; the per-league Poisson models are refitted once per kickoff date.
+    Ratings are regressed toward the league mean at the warm-up/window boundary
+    (a new season) and promoted teams start at the level of the relegated ones.
     """
-    elo = elo or Elo()
-    poisson = poisson or PoissonModel()
+    models = ModelSet(elo)
     history = sorted([m for m in warmup if m.completed and m.kickoff], key=lambda m: m.kickoff)
-    elo.fit(history)
     window = sorted([m for m in matches_window if m.kickoff], key=lambda m: m.kickoff)
+    models.fit(history, upcoming=window)
     preds: dict[str, dict[str, Probs]] = {}
     last_fit_day = None
     pending: list[Match] = []
@@ -183,14 +265,10 @@ def walk_forward(matches_window: list[Match], warmup: list[Match], elo: Elo | No
         if day != last_fit_day:
             history.extend(pending)
             pending = []
-            poisson.fit(history, as_of=m.kickoff.replace(hour=0, minute=0, second=0, microsecond=0))
+            models.refit_poisson(history, as_of=m.kickoff.replace(hour=0, minute=0, second=0, microsecond=0))
             last_fit_day = day
-        preds[m.match_id] = {
-            "elo": elo.predict(m.home, m.away, bool(m.extra.get("neutral"))),
-            "poisson": poisson.predict(m.home, m.away, bool(m.extra.get("neutral"))),
-        }
+        preds[m.match_id] = models.predict(m)
         if m.completed:
-            # Elo updates per match; Poisson refits per day from the growing history
-            elo.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")))
+            models.elo.update(m.home, m.away, m.home_goals, m.away_goals, bool(m.extra.get("neutral")), m.league)
             pending.append(m)
     return preds

@@ -10,8 +10,8 @@ from .config import DEFAULT_LEAGUES, LEAGUES, WINDOW_START
 from .fees import FEE_MODELS
 
 BANNER = """
-Robinhood Soccer Analyzer
-=========================
+Robinhood Soccer HQ (text menu; `rsa hq` opens the app window)
+================================================================
 Backtests Robinhood/Kalshi soccer match-winner contracts against real results
 for matches played after the 2026 World Cup, net of fees.
 
@@ -19,6 +19,8 @@ for matches played after the 2026 World Cup, net of fees.
   2) Fetch + backtest live data (Kalshi, ESPN, football-data.co.uk)
   3) Backtest data fetched earlier (offline)
   4) List Kalshi soccer series tickers
+  5) Picks: rank upcoming contracts by confidence and size stakes
+  6) Open the HQ app window
   h) Show all command-line options
   q) Quit
 """
@@ -82,6 +84,15 @@ def build_argv(choice: str, input_fn: Callable[[str], str] = input, today: date 
         return ["backtest", "--data-dir", data_dir] + _analysis_args(input_fn)
     if choice == "4":
         return ["series"]
+    if choice == "6":
+        return ["hq"]
+    if choice == "5":
+        leagues = _ask(input_fn, f"Leagues (comma list from {', '.join(LEAGUES)})", ",".join(DEFAULT_LEAGUES))
+        days = _ask(input_fn, "Days ahead", "7")
+        data_dir = _ask(input_fn, "Data directory with fetched history", "data/live")
+        bankroll = _ask(input_fn, "Bankroll in dollars", "1000")
+        conf = _ask(input_fn, "Minimum confidence (0-100)", "60")
+        return ["picks", "--leagues", leagues, "--days", days, "--data-dir", data_dir, "--bankroll", bankroll, "--min-confidence", conf]
     if choice == "h":
         return ["--help"]
     return None

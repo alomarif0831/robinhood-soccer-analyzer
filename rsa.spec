@@ -1,13 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec: single-file console executable. Built by scripts/build_exe.py
-# (which sets RSA_EXE_NAME to e.g. rsa-0.1.0-windows-x64 and --distpath release/);
-# `pyinstaller rsa.spec` on its own writes dist/rsa[.exe].
+# PyInstaller spec for Robinhood Soccer HQ. One analysis, two single-file executables:
+#   * the windowed app (RobinhoodSoccerHQ[.exe]; on macOS also "Robinhood Soccer HQ.app")
+#   * the console CLI (rsa[.exe])
+# Built by scripts/build_exe.py (which sets RSA_GUI_NAME / RSA_CLI_NAME and --distpath release/);
+# `pyinstaller rsa.spec` on its own writes dist/RobinhoodSoccerHQ[.exe] and dist/rsa[.exe].
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # zoneinfo needs the IANA database; Windows has none, so bundle the tzdata package.
 datas = collect_data_files("tzdata")
+# the HQ web UI (html/css/js/svg) travels with the package
+datas += [(os.path.join(SPECPATH, "rsa", "hq", "ui"), os.path.join("rsa", "hq", "ui"))]
 hiddenimports = collect_submodules("tzdata") + collect_submodules("rsa")
 
 # `cryptography` is only used for optional Kalshi API-key signing (rsa/kalshi.py imports it lazily
@@ -32,17 +37,25 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [("X utf8", None, "OPTION")],   # Python UTF-8 mode so console/file encoding is not the Windows code page
-    name=os.environ.get("RSA_EXE_NAME", "rsa"),
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=True,
-    disable_windowed_traceback=False,
+RUNTIME_OPTIONS = [("X utf8", None, "OPTION")]   # Python UTF-8 mode so console/file encoding is not the Windows code page
+
+cli = EXE(
+    pyz, a.scripts, a.binaries, a.datas, RUNTIME_OPTIONS,
+    name=os.environ.get("RSA_CLI_NAME", "rsa"),
+    debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
+    console=True, disable_windowed_traceback=False,
 )
+gui = EXE(
+    pyz, a.scripts, a.binaries, a.datas, RUNTIME_OPTIONS,
+    name=os.environ.get("RSA_GUI_NAME", "RobinhoodSoccerHQ"),
+    debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
+    console=False, disable_windowed_traceback=False,
+)
+if sys.platform == "darwin":
+    app = BUNDLE(
+        gui,
+        name="Robinhood Soccer HQ.app",
+        bundle_identifier="com.alomarif.robinhoodsoccerhq",
+        info_plist={"CFBundleDisplayName": "Robinhood Soccer HQ", "CFBundleShortVersionString": os.environ.get("RSA_VERSION", "0.0.0"),
+                    "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0"},
+    )

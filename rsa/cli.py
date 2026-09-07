@@ -1,5 +1,6 @@
-"""Command-line interface.
+"""Command-line interface for Robinhood Soccer HQ.
 
+    rsa hq                           open the desktop app (default when the packaged app is double-clicked)
     rsa series                       list Kalshi soccer series (live)
     rsa fetch    --data-dir data/live   pull results, odds and venue prices
     rsa backtest --data-dir data/live   analyze what was fetched (offline)
@@ -31,6 +32,23 @@ def _add_common_analysis(p: argparse.ArgumentParser) -> None:
     p.add_argument("--fill", default="ask", choices=("ask", "last"), help="fill YES at the ask / NO at 1-bid (default) or at last trade")
     p.add_argument("--slippage", type=float, default=0.0, help="extra cents (in dollars) added to every fill")
     p.add_argument("--out", default=None, help="report directory (default: reports/<data-dir name>)")
+    _add_staking_args(p)
+
+
+def _add_staking_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--bankroll", type=float, default=1000.0, help="bankroll in dollars for Kelly sizing (default 1000)")
+    p.add_argument("--kelly", type=float, default=0.25, help="fraction of full Kelly to stake (default 0.25)")
+    p.add_argument("--max-bet", type=float, default=0.02, help="max fraction of bankroll per bet (default 0.02)")
+    p.add_argument("--max-day", type=float, default=0.10, help="max fraction of bankroll per kickoff day (default 0.10)")
+    p.add_argument("--min-confidence", type=float, default=60.0, help="minimum confidence score 0-100 (default 60)")
+
+
+def _rules(args):
+    from .pro import StakingRules
+
+    return StakingRules(bankroll=args.bankroll, kelly_fraction=args.kelly, max_bet_fraction=args.max_bet,
+                        max_day_fraction=args.max_day, min_confidence=args.min_confidence,
+                        min_edge=getattr(args, "min_edge", 0.02))
 
 
 def _add_fetch_args(p: argparse.ArgumentParser) -> None:
@@ -75,6 +93,29 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--seed", type=int, default=42)
     d.add_argument("--leagues", default=",".join(DEFAULT_LEAGUES))
     _add_common_analysis(d)
+
+    h = sub.add_parser("hq", help="open Robinhood Soccer HQ (the desktop app) in a window")
+    h.add_argument("--port", type=int, default=0, help="listen port (default: random free port)")
+    h.add_argument("--no-open", action="store_true", help="do not open a window; just serve")
+    h.add_argument("--keep-alive", action="store_true", help="do not exit when the window closes")
+    h.add_argument("--smoke", action="store_true", help="start, hit the API once, exit (for CI)")
+
+    sub.add_parser("menu", help="the text menu (what the app shows in a terminal without arguments)")
+
+    k = sub.add_parser("picks", help="rank upcoming contracts by confidence and size stakes (needs fetched history for best results)")
+    k.add_argument("--leagues", default=",".join(DEFAULT_LEAGUES))
+    k.add_argument("--days", type=int, default=7, help="how many days ahead to look (default 7)")
+    k.add_argument("--data-dir", default="data/live", help="where `rsa fetch` stored the settled history")
+    k.add_argument("--out", default=None)
+    k.add_argument("--fees", default="robinhood", choices=sorted(FEE_MODELS))
+    k.add_argument("--min-edge", type=float, default=0.02)
+    k.add_argument("--fill", default="ask", choices=("ask", "last"))
+    k.add_argument("--no-trades", action="store_true", help="skip the recent-trade peek per market (faster, no freshness score)")
+    k.add_argument("--kalshi-base-url", default=None)
+    k.add_argument("--kalshi-key-id", default=os.environ.get("KALSHI_API_KEY_ID"))
+    k.add_argument("--kalshi-private-key", default=os.environ.get("KALSHI_PRIVATE_KEY_PATH"))
+    k.add_argument("--rps", type=float, default=8.0)
+    _add_staking_args(k)
     return p
 
 
@@ -122,7 +163,7 @@ def _analyze_and_write(bundle, args, extra_meta: dict | None = None) -> int:
     from .pipeline import analyze, write_outputs
 
     fees = get_fee_model(args.fees)
-    result, df, unmatched = analyze(bundle, fees, min_edge=args.min_edge, fill=args.fill, slippage=args.slippage)
+    result, df, unmatched = analyze(bundle, fees, min_edge=args.min_edge, fill=args.fill, slippage=args.slippage, rules=_rules(args))
     out = args.out or str(Path("reports") / Path(args.data_dir).name)
     meta = dict(bundle.meta, fee_model=args.fees, min_edge=args.min_edge, fill=args.fill, slippage=args.slippage, **(extra_meta or {}))
     path = write_outputs(result, df, unmatched, bundle, out, meta)
@@ -152,19 +193,67 @@ def cmd_run(args) -> int:
 
 
 def cmd_demo(args) -> int:
-    from .pipeline import collect, save_bundle
+    from datetime import datetime, timezone
+
+    from .pipeline import collect, collect_upcoming, run_picks, save_bundle, write_picks
     from .synth import DemoKalshiClient, demo_fetch, generate
 
     root = Path(args.data_dir) / "raw"
     leagues = leagues_from_keys(args.leagues.split(","))
     generate(root, seed=args.seed, leagues=[lg.key for lg in leagues])
     fetch = demo_fetch(root)
-    bundle = collect(leagues, date(2026, 7, 20), date(2026, 9, 6), DemoKalshiClient(root), cache_dir=None,
-                     espn_fetch=fetch, fd_fetch=fetch, warmup_days=150)
+    client = DemoKalshiClient(root)
+    # entry snapshots six hours before kickoff so closing-line value is visible in the demo
+    bundle = collect(leagues, date(2026, 7, 20), date(2026, 9, 6), client, cache_dir=None,
+                     espn_fetch=fetch, fd_fetch=fetch, warmup_days=150, minutes_before_kickoff=360)
     bundle.meta["synthetic"] = True
     save_bundle(bundle, args.data_dir)
     print(f"Synthetic data: {len(bundle.matches)} fixtures, {len(bundle.warmup)} warm-up results, {len(bundle.snapshots)} snapshots")
-    return _analyze_and_write(bundle, args, {"synthetic": True})
+    rc = _analyze_and_write(bundle, args, {"synthetic": True})
+    demo_now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    up = collect_upcoming(leagues, client, days=10, today=date(2026, 9, 7), espn_fetch=fetch, fd_fetch=fetch, now=demo_now)
+    res = run_picks(bundle, up, get_fee_model(args.fees), _rules(args), args.fill, now=demo_now)
+    out = args.out or str(Path("reports") / Path(args.data_dir).name)
+    path = write_picks(res, up, out, {"synthetic": True, "fee_model": args.fees, "fill": args.fill, "rules": _rules(args)})
+    print(f"Picks written to {path} ({0 if res['portfolio'] is None else len(res['portfolio'])} picks from {len(up.matches)} upcoming fixtures)")
+    return rc
+
+
+def cmd_hq(args) -> int:
+    from .hq.server import serve
+
+    return serve(port=args.port, open_ui=not args.no_open, exit_on_idle=not args.keep_alive, smoke=args.smoke)
+
+
+def cmd_menu(args) -> int:
+    from .interactive import run_menu
+
+    return run_menu(run)
+
+
+def cmd_picks(args) -> int:
+    from .pipeline import collect_upcoming, load_bundle, run_picks, write_picks
+
+    leagues = leagues_from_keys(args.leagues.split(","))
+    client = _client(args)
+    try:
+        bundle = load_bundle(args.data_dir)
+    except FileNotFoundError:
+        logging.warning("No fetched history in %s; using prior pooling weights. Run `rsa fetch` first for fitted weights.", args.data_dir)
+        bundle = None
+    up = collect_upcoming(leagues, client, days=args.days, cache_dir=Path(args.data_dir) / "cache", refresh=True,
+                          with_last_trade=not args.no_trades)
+    fees = get_fee_model(args.fees)
+    rules = _rules(args)
+    res = run_picks(bundle, up, fees, rules, args.fill)
+    out = args.out or str(Path("reports") / Path(args.data_dir).name)
+    path = write_picks(res, up, out, {"fee_model": args.fees, "fill": args.fill, "rules": rules})
+    n = 0 if res["portfolio"] is None else len(res["portfolio"])
+    print(f"{len(up.matches)} upcoming fixtures, {len(up.snapshots)} open contracts, {n} pick(s). Report: {path}")
+    if n:
+        cols = ["kickoff", "league", "home", "away", "outcome", "side", "price", "fair", "edge", "confidence", "tier", "stake", "contracts"]
+        print(res["portfolio"][cols].to_string(index=False))
+    return 0
 
 
 def _utf8_stdio() -> None:
@@ -180,7 +269,8 @@ def run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    return {"series": cmd_series, "fetch": cmd_fetch, "backtest": cmd_backtest, "run": cmd_run, "demo": cmd_demo}[args.cmd](args)
+    return {"series": cmd_series, "fetch": cmd_fetch, "backtest": cmd_backtest, "run": cmd_run, "demo": cmd_demo,
+            "picks": cmd_picks, "hq": cmd_hq, "menu": cmd_menu}[args.cmd](args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -190,7 +280,11 @@ def main(argv: list[str] | None = None) -> int:
     _utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        return run_menu(run)
+        # No arguments: the packaged app (or a bare `rsa`) opens the HQ window; the terminal menu is `rsa menu`.
+        if is_frozen() or os.environ.get("RSA_DEFAULT") == "hq":
+            argv = ["hq"]
+        else:
+            return run_menu(run)
     try:
         return run(argv)
     except Exception as e:  # noqa: BLE001

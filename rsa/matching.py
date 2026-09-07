@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from .prices import PriceSnapshot
-from .results import Match, bookmaker_probs
+from .results import CLOSING_BOOK_PREFERENCE, DEFAULT_BOOK_PREFERENCE, PREMATCH_BOOK_PREFERENCE, Match, bookmaker_probs
 from .teams import canonical, match_team
 
 log = logging.getLogger(__name__)
@@ -29,6 +29,17 @@ class MatchedMarket:
     volume: dict[str, float | None] = field(default_factory=dict)
     market_result: dict[str, str | None] = field(default_factory=dict)
     tickers: dict[str, str] = field(default_factory=dict)
+    close_price: dict[str, float | None] = field(default_factory=dict)
+    close_bid: dict[str, float | None] = field(default_factory=dict)
+    close_ask: dict[str, float | None] = field(default_factory=dict)
+    open_price: dict[str, float | None] = field(default_factory=dict)
+    last_trade_time: dict[str, datetime | None] = field(default_factory=dict)
+
+    @property
+    def minutes_before_kickoff(self) -> float | None:
+        if self.snapshot_time is None or self.match.kickoff is None:
+            return None
+        return (self.match.kickoff - self.snapshot_time).total_seconds() / 60
 
     def to_row(self) -> dict:
         row = self.match.to_row()
@@ -41,12 +52,28 @@ class MatchedMarket:
             row[f"vol_{o}"] = self.volume.get(o)
             row[f"mres_{o}"] = self.market_result.get(o)
             row[f"ticker_{o}"] = self.tickers.get(o)
-        bp = bookmaker_probs(self.match.odds)
+            row[f"close_{o}"] = self.close_price.get(o)
+            row[f"cbid_{o}"] = self.close_bid.get(o)
+            row[f"cask_{o}"] = self.close_ask.get(o)
+            row[f"open_{o}"] = self.open_price.get(o)
+            ltt = self.last_trade_time.get(o)
+            row[f"ltt_{o}"] = ltt.isoformat() if ltt else None
+        # decision-time line: the closing line is only admissible when the snapshot is at kickoff
+        mins = self.minutes_before_kickoff
+        prefer = DEFAULT_BOOK_PREFERENCE if (mins is None or mins <= 15) else PREMATCH_BOOK_PREFERENCE
+        row["minutes_before"] = mins
+        bp = bookmaker_probs(self.match.odds, prefer)
         if bp:
             (row["book_home"], row["book_draw"], row["book_away"]), row["book_source"] = bp
         else:
             row["book_home"] = row["book_draw"] = row["book_away"] = None
             row["book_source"] = None
+        bc = bookmaker_probs(self.match.odds, CLOSING_BOOK_PREFERENCE)
+        if bc:
+            (row["bookc_home"], row["bookc_draw"], row["bookc_away"]), row["bookc_source"] = bc
+        else:
+            row["bookc_home"] = row["bookc_draw"] = row["bookc_away"] = None
+            row["bookc_source"] = None
         return row
 
 
@@ -125,6 +152,11 @@ def join_snapshots(snaps: list[PriceSnapshot], matches: list[Match], max_days: f
             mm.volume[o] = s.volume
             mm.market_result[o] = s.result
             mm.tickers[o] = s.market_ticker
+            mm.close_price[o] = s.close_price
+            mm.close_bid[o] = s.close_bid
+            mm.close_ask[o] = s.close_ask
+            mm.open_price[o] = s.open_price
+            mm.last_trade_time[o] = s.last_trade_time
         matched.append(mm)
     return matched, unmatched
 
@@ -134,11 +166,13 @@ def matched_frame(matched: list[MatchedMarket]) -> pd.DataFrame:
     if df.empty:
         return df
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True)
+    df["snapshot_time"] = pd.to_datetime(df["snapshot_time"], utc=True, errors="coerce")
     for o in OUTCOMES:
-        for pre in ("mkt", "bid", "ask", "vol", "book"):
+        for pre in ("mkt", "bid", "ask", "vol", "book", "bookc", "close", "cbid", "cask", "open"):
             col = f"{pre}_{o}"
             if col in df:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[f"ltt_{o}"] = pd.to_datetime(df[f"ltt_{o}"], utc=True, errors="coerce")
     return df.sort_values(["kickoff", "league"]).reset_index(drop=True)
 
 

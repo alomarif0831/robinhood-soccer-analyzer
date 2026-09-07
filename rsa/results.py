@@ -101,7 +101,7 @@ class Match:
 # ----------------------------------------------------------------------- HTTP
 def _http_get_text(url: str, session: requests.Session | None = None, timeout: float = 30) -> str:
     s = session or requests.Session()
-    r = s.get(url, timeout=timeout, headers={"User-Agent": "robinhood-soccer-analyzer/0.1"})
+    r = s.get(url, timeout=timeout, headers={"User-Agent": "robinhood-soccer-hq/0.2"})
     r.raise_for_status()
     if r.encoding is None or r.encoding.lower() == "iso-8859-1":
         r.encoding = r.apparent_encoding or "latin-1"
@@ -281,6 +281,37 @@ def parse_fdcouk_csv(text: str, league_key: str, div: str = "", season: str = ""
     return out
 
 
+FDCOUK_FIXTURES_URL = "https://www.football-data.co.uk/fixtures.csv"
+
+
+def load_fdcouk_fixtures(
+    leagues: Iterable[League],
+    cache_dir: str | Path | None = None,
+    refresh: bool = False,
+    session: requests.Session | None = None,
+    fetch: Callable[[str], str] | None = None,
+) -> list[Match]:
+    """Upcoming fixtures with current bookmaker odds (one CSV covering every division)."""
+    by_div = {lg.fdcouk: lg for lg in leagues if lg.fdcouk}
+    if not by_div:
+        return []
+    fetch = fetch or (lambda url: _http_get_text(url, session))
+    cf = Path(cache_dir) / "fdcouk" / "fixtures.csv" if cache_dir else None
+    text = _cached_text(FDCOUK_FIXTURES_URL, cf, refresh, fetch)
+    out: list[Match] = []
+    for m in parse_fdcouk_csv(text, "", "", "fixtures"):
+        div = m.match_id.split(":")[1] if m.match_id.count(":") >= 1 else ""
+        lg = by_div.get(div)
+        if lg is None:
+            continue
+        m.league = lg.key
+        m.match_id = f"fdfix:{div}:{m.kickoff:%Y%m%d}:{m.home}:{m.away}"
+        m.completed = False
+        m.home_goals = m.away_goals = None
+        out.append(m)
+    return out
+
+
 def load_fdcouk(
     league: League,
     season: str,
@@ -329,6 +360,10 @@ def implied_probs(odds_home: float, odds_draw: float, odds_away: float, method: 
 
 
 DEFAULT_BOOK_PREFERENCE = ("psc", "ps", "avgc", "maxc", "avg", "b365c", "b365", "bfec", "espn")
+# What a bettor could see well before kickoff: football-data's non-closing columns are collected
+# around Friday for weekend games, so they stand in for the pre-match line. Never the closing line.
+PREMATCH_BOOK_PREFERENCE = ("ps", "avg", "max", "b365", "bfe", "espn")
+CLOSING_BOOK_PREFERENCE = ("psc", "avgc", "maxc", "b365c", "bfec")
 
 
 def bookmaker_probs(odds: dict[str, float], prefer: Iterable[str] = DEFAULT_BOOK_PREFERENCE,

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -141,11 +142,33 @@ def _odds_with_margin(probs, margin, rng, noise=0.0):
     ps = [_sigmoid(_logit(p) + rng.gauss(0, noise)) for p in probs]
     s = sum(ps)
     ps = [p / s for p in ps]
-    return [round(1 / (p * (1 + margin)), 2) for p in ps]
+    return [round(max(1.01, 1 / (p * (1 + margin))), 2) for p in ps]
+
+
+_CODES: dict[str, str] = {}
 
 
 def _code(name: str) -> str:
-    return "".join(c for c in name.upper() if c.isalpha())[:3]
+    """Deterministic 3-letter ticker code, unique across names seen so far (Real Madrid / Real Betis must differ)."""
+    if name in _CODES:
+        return _CODES[name]
+    letters = "".join(c for c in name.upper() if c.isalpha())
+    words = [w for w in re.split(r"[^A-Za-z]+", name.upper()) if w]
+    cands = []
+    if len(words) > 1:
+        cands.append(words[0][0] + words[-1][:2])
+        cands.append("".join(w[0] for w in words[:3]).ljust(3, "X")[:3])
+    cands.append(letters[:3])
+    for i in range(0, max(1, len(letters) - 2)):
+        cands.append(letters[i:i + 3])
+    used = set(_CODES.values())
+    for c in cands:
+        if len(c) == 3 and c not in used:
+            _CODES[name] = c
+            return c
+    c = f"{len(_CODES):03d}"
+    _CODES[name] = c
+    return c
 
 
 class SyntheticWorld:
@@ -200,10 +223,14 @@ class SyntheticWorld:
                     self._make_round(lg, order[i], d, priced=True)
                     i += 1
                 d += timedelta(days=7)
+            # one upcoming matchday (unplayed, open markets) for the picks demo
+            d = self.window_end + timedelta(days=(5 - self.window_end.weekday()) % 7 or 7)
+            if i < len(order):
+                self._make_round(lg, order[i], d, priced=True, upcoming=True)
         self.matches.sort(key=lambda m: m["kickoff"])
         return self
 
-    def _make_round(self, lg: str, pairs, d: date, priced: bool) -> None:
+    def _make_round(self, lg: str, pairs, d: date, priced: bool, upcoming: bool = False) -> None:
         rng = self.rng
         hours = KICKOFF_HOURS[lg]
         for k, (home, away) in enumerate(pairs):
@@ -221,7 +248,7 @@ class SyntheticWorld:
             true = _three_way(mat)
             hg, ag = _sample_score(rng, mat)
             m = {"league": lg, "kickoff": kickoff, "home": home, "away": away, "hg": hg, "ag": ag, "true": true,
-                 "odds": {}, "venue": None, "espn_id": f"{700000 + len(self.matches)}"}
+                 "odds": {}, "venue": None, "espn_id": f"{700000 + len(self.matches)}", "upcoming": upcoming}
             for key, margin in MARGINS.items():
                 noise = 0.06 if key.endswith("c") or key in ("psc",) else 0.10
                 m["odds"][key] = _odds_with_margin(true, margin, rng, noise)
@@ -230,16 +257,16 @@ class SyntheticWorld:
             self.matches.append(m)
 
     def _venue_prices(self, true, rng: random.Random) -> dict:
-        """Kalshi-style YES prices with planted biases: draws ~2.5pt cheap, longshots ~2pt rich."""
+        """Kalshi-style YES prices with planted biases: draws ~4pt cheap, longshots ~2.5pt rich, favourites ~2.5pt cheap."""
         out = {}
         for o, p in zip(("home", "draw", "away"), true):
             x = _sigmoid(_logit(p) + rng.gauss(0, 0.22)) + 0.012   # venue overround ~ +2-4 pts across 3 legs
             if o == "draw":
-                x -= 0.025
+                x -= 0.04
             if p < 0.20:
-                x += 0.02
+                x += 0.025
             elif p > 0.60:
-                x -= 0.015
+                x -= 0.025
             x = min(max(x, 0.02), 0.97)
             spread = rng.choice([0.01, 0.02, 0.02, 0.03])
             last = round(x, 2)
@@ -261,17 +288,19 @@ def write_espn(world: SyntheticWorld, root: Path) -> None:
     for (code, d), ms in by_day.items():
         events = []
         for m in ms:
+            up = m.get("upcoming", False)
             events.append({
                 "id": m["espn_id"], "date": _iso(m["kickoff"]), "name": f"{m['home'][0]} at {m['away'][0]}",
                 "competitions": [{
                     "id": m["espn_id"], "date": _iso(m["kickoff"]), "neutralSite": False,
                     "competitors": [
-                        {"homeAway": "home", "winner": m["hg"] > m["ag"], "score": str(m["hg"]),
+                        {"homeAway": "home", "winner": (m["hg"] > m["ag"]) if not up else False, "score": "" if up else str(m["hg"]),
                          "team": {"displayName": m["home"][0], "shortDisplayName": m["home"][0], "abbreviation": _code(m["home"][0])}},
-                        {"homeAway": "away", "winner": m["ag"] > m["hg"], "score": str(m["ag"]),
+                        {"homeAway": "away", "winner": (m["ag"] > m["hg"]) if not up else False, "score": "" if up else str(m["ag"]),
                          "team": {"displayName": m["away"][0], "shortDisplayName": m["away"][0], "abbreviation": _code(m["away"][0])}},
                     ],
-                    "status": {"type": {"name": "STATUS_FULL_TIME", "completed": True, "state": "post"}},
+                    "status": {"type": {"name": "STATUS_SCHEDULED" if up else "STATUS_FULL_TIME", "completed": not up,
+                                        "state": "pre" if up else "post"}},
                     "odds": [{"provider": {"name": "synthetic"}, "details": "", "overUnder": 2.5,
                               "homeTeamOdds": {"moneyLine": _decimal_to_american(m["odds"]["b365"][0])},
                               "awayTeamOdds": {"moneyLine": _decimal_to_american(m["odds"]["b365"][2])},
@@ -284,6 +313,7 @@ def write_espn(world: SyntheticWorld, root: Path) -> None:
 
 
 def _decimal_to_american(dec: float) -> int:
+    dec = max(dec, 1.01)
     return int(round((dec - 1) * 100)) if dec >= 2 else int(round(-100 / (dec - 1)))
 
 
@@ -304,15 +334,24 @@ def write_fdcouk(world: SyntheticWorld, root: Path) -> None:
         for m in world.matches:
             if m["league"] != lg_key:
                 continue
-            season = "2627" if m["kickoff"].date() >= date(2026, 7, 1) else "2526"
+            season = "fixtures" if m.get("upcoming") else "2627" if m["kickoff"].date() >= date(2026, 7, 1) else "2526"
             local = m["kickoff"].astimezone(london)
             ftr = "H" if m["hg"] > m["ag"] else "A" if m["hg"] < m["ag"] else "D"
-            row = [lg.fdcouk, local.strftime("%d/%m/%Y"), local.strftime("%H:%M"), m["home"][1], m["away"][1],
-                   str(m["hg"]), str(m["ag"]), ftr, "", "", ""]
+            if m.get("upcoming"):
+                row = [lg.fdcouk, local.strftime("%d/%m/%Y"), local.strftime("%H:%M"), m["home"][1], m["away"][1], "", "", "", "", "", ""]
+            else:
+                row = [lg.fdcouk, local.strftime("%d/%m/%Y"), local.strftime("%H:%M"), m["home"][1], m["away"][1],
+                       str(m["hg"]), str(m["ag"]), ftr, "", "", ""]
             for key in ("B365", "PS", "Max", "Avg", "B365C", "PSC", "MaxC", "AvgC"):
                 row += [f"{v:.2f}" for v in m["odds"][key_map[key]]]
             seasons.setdefault(season, []).append(",".join(row))
         for season, lines in seasons.items():
+            if season == "fixtures":
+                p = root / "fdcouk" / "fixtures.csv"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                existing = p.read_text(encoding="utf-8") if p.exists() else ",".join(cols + odds_cols) + "\n"
+                p.write_text(existing + "\n".join(lines) + "\n", encoding="utf-8")
+                continue
             p = root / "fdcouk" / season / f"{lg.fdcouk}.csv"
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(",".join(cols + odds_cols) + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
@@ -321,8 +360,12 @@ def write_fdcouk(world: SyntheticWorld, root: Path) -> None:
 def write_kalshi(world: SyntheticWorld, root: Path) -> None:
     rng = random.Random(99)
     markets_by_series: dict[str, list[dict]] = {}
+    open_by_series: dict[str, list[dict]] = {}
     for m in world.matches:
         if not m["venue"]:
+            continue
+        if m.get("upcoming"):
+            _write_open_market(world, m, open_by_series, rng)
             continue
         lg = LEAGUES[m["league"]]
         series = lg.kalshi_series
@@ -352,6 +395,30 @@ def write_kalshi(world: SyntheticWorld, root: Path) -> None:
         p = root / "kalshi" / "markets" / f"{series}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"markets": ms, "cursor": ""}), encoding="utf-8")
+    for series, ms in open_by_series.items():
+        p = root / "kalshi" / "open" / f"{series}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"markets": ms, "cursor": ""}), encoding="utf-8")
+
+
+def _write_open_market(world: SyntheticWorld, m: dict, open_by_series: dict, rng: random.Random) -> None:
+    lg = LEAGUES[m["league"]]
+    series = lg.kalshi_series
+    kick = m["kickoff"]
+    date_code = kick.strftime("%y%b%d").upper()
+    event = f"{series}-{date_code}{_code(m['home'][2])}{_code(m['away'][2])}"
+    title = f"{m['home'][2]} vs {m['away'][2]}"
+    for o, label, suffix in (("home", m["home"][2], _code(m["home"][2])), ("draw", "Tie", "TIE"), ("away", m["away"][2], _code(m["away"][2]))):
+        v = m["venue"][o]
+        bid, ask, last = int(round(v["bid"] * 100)), int(round(v["ask"] * 100)), int(round(v["last"] * 100))
+        open_by_series.setdefault(series, []).append({
+            "ticker": f"{event}-{suffix}", "event_ticker": event, "market_type": "binary", "title": f"{title} Winner?",
+            "subtitle": label, "yes_sub_title": label, "status": "open", "result": "",
+            "open_time": _iso(kick - timedelta(days=6)), "close_time": _iso(kick + timedelta(hours=2, minutes=15)),
+            "yes_bid": bid, "yes_ask": ask, "last_price": last, "yes_bid_dollars": f"{v['bid']:.2f}",
+            "yes_ask_dollars": f"{v['ask']:.2f}", "last_price_dollars": f"{v['last']:.2f}",
+            "volume": v["volume"], "open_interest": rng.randint(50, 2000),
+        })
 
 
 def _write_trades_and_candles(root: Path, ticker: str, v: dict, open_time: datetime, kick: datetime,
@@ -385,12 +452,23 @@ def _write_trades_and_candles(root: Path, ticker: str, v: dict, open_time: datet
     p.write_text(json.dumps({"trades": trades, "cursor": ""}), encoding="utf-8")
 
     candles = []
+    spread = v["ask"] - v["bid"]
+    pre_trades = [(datetime.fromisoformat(t["created_time"].replace("Z", "+00:00")), t["yes_price"] / 100) for t in trades
+                  if not t["trade_id"].endswith(tuple(f"live{j}" for j in range(5)))]
     t = kick - timedelta(hours=48)
     while t <= close_time:
         pre = t <= kick
-        bid = v["bid"] if pre else (0.9 if settled_yes else 0.02)
-        ask = v["ask"] if pre else (0.95 if settled_yes else 0.05)
-        last = v["last"] if pre else (bid + ask) / 2
+        if pre:
+            # quotes track the tape: mid = last trade before this hour, so entry and closing quotes differ
+            before = [px for ts, px in pre_trades if ts <= t]
+            mid = before[-1] if before else v["last"]
+            bid = max(0.01, round(mid - spread / 2, 2))
+            ask = min(0.99, round(mid + spread / 2, 2))
+            last = mid
+        else:
+            bid = 0.9 if settled_yes else 0.02
+            ask = 0.95 if settled_yes else 0.05
+            last = (bid + ask) / 2
         candles.append({
             "end_period_ts": int(t.timestamp()),
             "yes_bid": {"open": int(bid * 100), "low": int(bid * 100) - 1, "high": int(bid * 100), "close": int(round(bid * 100)),
@@ -428,9 +506,6 @@ class DemoKalshiClient(KalshiClient):
         super().__init__(cache_dir=None, requests_per_second=0)
         self.root = Path(root) / "kalshi"
 
-    def get(self, path, params=None, *, cacheable=True):  # pragma: no cover - guard
-        raise RuntimeError(f"DemoKalshiClient is offline; attempted GET {path}")
-
     def soccer_series(self) -> list[dict]:
         return [{"ticker": p.stem, "title": f"{p.stem} (demo)"} for p in sorted((self.root / "markets").glob("*.json"))]
 
@@ -443,6 +518,16 @@ class DemoKalshiClient(KalshiClient):
             return []
         ms = json.loads(p.read_text(encoding="utf-8"))["markets"]
         return [m for m in ms if datetime.fromisoformat(m["close_time"].replace("Z", "+00:00")).timestamp() >= since_ts]
+
+    def open_markets(self, series_ticker: str) -> list[dict]:
+        p = self.root / "open" / f"{series_ticker}.json"
+        return json.loads(p.read_text(encoding="utf-8"))["markets"] if p.exists() else []
+
+    def get(self, path, params=None, *, cacheable=True):
+        # the only live GET the picks flow makes is the recent-trades peek; serve nothing (no tape for open markets)
+        if path == "/markets/trades":
+            return {"trades": [], "cursor": ""}
+        raise RuntimeError(f"DemoKalshiClient is offline; attempted GET {path}")
 
     def trades(self, ticker: str, min_ts=None, max_ts=None) -> list[dict]:
         p = self.root / "trades" / f"{ticker}.json"
@@ -473,6 +558,9 @@ def demo_fetch(root: str | Path):
         if m:
             p = root / "espn" / m.group(1) / f"{m.group(2)}.json"
             return p.read_text(encoding="utf-8") if p.exists() else '{"events": []}'
+        if url.endswith("/fixtures.csv"):
+            p = root / "fdcouk" / "fixtures.csv"
+            return p.read_text(encoding="utf-8") if p.exists() else "Div,Date,Time,HomeTeam,AwayTeam\n"
         m = re.search(r"/mmz4281/(\d{4})/([A-Z0-9]+)\.csv", url)
         if m:
             p = root / "fdcouk" / m.group(1) / f"{m.group(2)}.csv"

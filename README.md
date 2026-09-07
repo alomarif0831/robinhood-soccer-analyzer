@@ -1,180 +1,162 @@
-# Robinhood Soccer Analyzer
+# Robinhood Soccer HQ
 
-Backtests the soccer prediction markets you can trade on Robinhood against real match
-results, for every match played **after the 2026 World Cup** (final: 19 July 2026), to see
-whether the market is systematically mispriced and whether any of it survives fees.
+A desktop app that backtests the soccer prediction markets you can trade on Robinhood against
+real match results, and ranks upcoming bets by confidence the way professionals do: fee-aware
+edges against a pooled fair value, uncertainty, closing line value, liquidity filters, fractional
+Kelly stakes. It covers every match played **after the 2026 World Cup** (final: 19 July 2026).
 
 Robinhood's soccer event contracts (match winner: home / draw / away) clear on two exchanges:
 
-* **Kalshi** – the majority of league game markets (`KXEPLGAME`, `KXLALIGAGAME`,
-  `KXBUNDESLIGAGAME`, `KXSERIEAGAME`, `KXLIGUE1GAME`, `KXMLSGAME`, `KXUCLGAME`, …).
-  Kalshi's REST API is public, so the full pre-kickoff price history is available.
-* **Rothera** – Robinhood's own exchange, which took over some soccer listings in 2026.
-  Rothera has no public market-data API. Prices you record from the app (or your order
-  history) can be imported with `--prices-csv` and are analyzed identically.
+* **Kalshi** – most league game markets (`KXEPLGAME`, `KXLALIGAGAME`, `KXBUNDESLIGAGAME`,
+  `KXSERIEAGAME`, `KXLIGUE1GAME`, `KXMLSGAME`, `KXUCLGAME`, …). Kalshi's REST API is public, so the
+  full pre-kickoff price history and the live order book are available.
+* **Rothera** – Robinhood's own exchange, which took over some soccer listings in 2026. It has no
+  public market-data API; prices you record from the app can be imported as CSV and analyzed the
+  same way.
 
-## What it does
+## Get the app
 
-1. **Collects** results and kickoff times (ESPN's free scoreboard feed), bookmaker
-   opening/closing odds (football-data.co.uk CSVs, incl. Pinnacle closing), and venue prices
-   (Kalshi trades + hourly bid/ask candles, or a CSV you supply).
-2. **Snapshots** each contract at kickoff (or `--minutes-before` kickoff): last trade, best bid,
-   best ask, volume. In-play trades are ignored.
-3. **Joins** every priced event to its fixture by league, team-name alias/fuzzy match, and date.
-   Home/away orientation comes from the results source, so it doesn't matter which team the
-   venue lists first.
-4. **Scores** the venue's prices against three references: the de-vigged closing line
-   (`book`), a walk-forward Elo (`elo`) and a time-decayed Poisson/Dixon-Coles model
-   (`poisson`), using Brier score and log loss with a paired t-test.
-5. **Diagnoses** systematic bias: calibration by price bucket (favourite–longshot), by outcome
-   (is the draw underpriced?), by league, and venue-minus-closing-line per outcome.
-6. **Backtests** strategies **net of fees**: naive rules (always home/draw/away/favourite/
-   underdog/NO-draw) and reference-driven bets (buy YES or NO whenever `fair − price − fee ≥ min-edge`),
-   filling at the ask (NO at 1 − bid). Reports ROI with bootstrap 95% intervals, an
-   edge-threshold sweep, and breakdowns by outcome, side and league.
+The repository's GitHub Actions workflow builds everything on GitHub's own machines, like Stock
+Tracker HQ, so nobody needs Python installed:
 
-Fees default to Robinhood's June-2026 schedule: commission `0.10 × p × (1−p)` per contract
-(`0.05` with Gold), rounded up to the cent per order, plus a $0.01 exchange fee. `--fees kalshi`
-models trading on Kalshi directly (`0.07 × p × (1−p)`), `--fees none` shows gross numbers.
+1. GitHub → **Actions** → **Build executables** → **Run workflow**. Type a version such as
+   `v0.2.0` to publish a Release, or leave it blank for artifacts only. Pushing a `v*` tag does the
+   same.
+2. Download from the run's **Artifacts** or the **Releases** page:
 
-## Getting the .exe without touching a terminal
+| platform | file | what it is |
+|---|---|---|
+| Windows | `RobinhoodSoccerHQ-<version>-windows-x64.exe` | the app: double-click, the HQ window opens |
+| Windows | `rsa-<version>-windows-x64.exe` | the command-line version (PowerShell) |
+| macOS (Apple Silicon) | `RobinhoodSoccerHQ-<version>-macos-arm64.dmg` | `Robinhood Soccer HQ.app` + `rsa` |
+| macOS (Intel) | `RobinhoodSoccerHQ-<version>-macos-x64.dmg` | same, for Intel Macs |
+| Linux | `RobinhoodSoccerHQ-<version>-linux-x64.tar.gz`, `rsa-<version>-linux-x64.tar.gz` | built on Ubuntu 22.04 (glibc 2.35+) |
 
-The repository includes a GitHub Actions workflow that builds the program on GitHub's own
-Windows, macOS and Linux machines, so nobody needs Python installed:
+The builds are unsigned. Windows SmartScreen asks once (*More info → Run anyway*); macOS needs
+*System Settings → Privacy & Security → Open Anyway* once, or
+`xattr -dr com.apple.quarantine "Robinhood Soccer HQ.app"`.
 
-1. On GitHub open the repository → **Actions** → **Build executables** → **Run workflow**. Type a
-   version such as `v0.1.1` in the box to publish a Release with the executables attached, or leave
-   it blank to only produce downloadable artifacts. Pushing a tag such as `v0.1.1` does the same.
-2. When the run finishes (about 5 minutes), open it and download the
-   **robinhood-soccer-analyzer-windows** artifact. It contains `rsa.exe` and
-   `rsa-<version>-windows-x64.exe` (same file, versioned name). A tag push also publishes them on
-   the repository's *Releases* page.
-3. Unzip it anywhere and **double-click `rsa.exe`**.
+The app starts a local server on 127.0.0.1 and opens the HQ as an app-style window in Chrome or
+Edge (falling back to your default browser). Nothing is sent anywhere except the data sources
+below and, when you ask, GitHub for update checks. It quits when you close the window (or press
+Quit). Data, settings and reports live in `~/.robinhood-soccer-hq` (`RSA_HOME` to relocate).
 
-The same run also produces **robinhood-soccer-analyzer-macos-arm64** (Apple Silicon: any Mac from
-late 2020 on) and **-macos-x64** (Intel Macs), each holding a `.dmg`. Open the DMG, drag the
-*Robinhood Soccer Analyzer* folder anywhere, and double-click **Run Robinhood Soccer Analyzer.command**
-for the same menu in a Terminal window. The build is unsigned, so the first launch needs
-*System Settings → Privacy & Security → Open Anyway* (or `xattr -d com.apple.quarantine rsa` in
-Terminal) once. The **-linux** artifact is a `.tar.gz` (extract with `tar xzf`; built on Ubuntu
-22.04, needs glibc 2.35+). A menu appears: run the demo, fetch and
-   backtest live data, or re-analyze data fetched earlier. Reports land in a `reports/` folder
-   next to where you ran it. Windows SmartScreen may warn once because the file is unsigned:
-   *More info → Run anyway*.
+## The HQ
 
-PowerShell users can call it directly: `.\rsa.exe run --leagues epl,laliga --data-dir data\live`.
+* **Dashboard** – data freshness, the headline verdicts, venue-vs-closing-line accuracy, the
+  professional strategy's ROI and closing line value, picks ready, per-league data status, the
+  pooling weights (what the fair value trusts).
+* **Picks** – upcoming contracts that pass every rule, with fill price, fee, fair probability,
+  edge, a 0–100 confidence score and tier (A/B/C), the Kelly stake and contract count, and *why*
+  (source agreement, spread, freshness, z-score). Positive-edge contracts that were blocked are
+  listed with the rule that blocked them.
+* **Backtest** – calibration of venue prices, ROI by minimum edge, realized ROI by confidence tier
+  and by predicted-edge decile (the proof that the score ranks bets), accuracy of every
+  probability source vs results and vs the closing line, systematic bias by outcome and league,
+  naive rules, and every bet the professional rules would have placed with its closing line value.
+* **Matches** – every priced match: venue last/ask/bid/close, pooled fair value with uncertainty,
+  decision-time and closing bookmaker lines, Poisson and Elo, volume, rest days.
+* **Settings** – leagues, dates, fee model, fills, bankroll, Kelly fraction, caps, minimum
+  confidence, theme, optional Kalshi API key, update check.
 
-## Building the .exe yourself
+Buttons in the top bar run the jobs: **Fetch** (results + odds + prices for the settings window,
+then a backtest), **Backtest** (re-analyze offline with new settings), **Picks** (rank upcoming
+contracts). **Demo** runs everything on synthetic data with planted biases so you can see what a
+finding looks like without internet; the demo source is clearly labelled and never a real
+recommendation.
 
-Requirements: Windows 10/11 and [Python 3.10+](https://www.python.org/downloads/) with
-*Add python.exe to PATH* ticked during install.
+## How the numbers are made
 
-```bat
-git clone https://github.com/alomarif0831/robinhood-soccer-analyzer
-cd robinhood-soccer-analyzer
-build.bat
-```
+1. **Data.** Results and kickoff times from ESPN's scoreboard feed; opening and closing bookmaker
+   odds from football-data.co.uk (Pinnacle closing `PSC*` is the sharpest public benchmark;
+   `fixtures.csv` gives current odds for upcoming games); venue prices from Kalshi's trade tape,
+   hourly bid/ask candles and the live order book. Entry snapshots are taken at kickoff or
+   `minutes_before` earlier; the closing quote at kickoff is kept separately for CLV.
+2. **No look-ahead.** When the entry is before kickoff, only the pre-match bookmaker line is used
+   as a source; the closing line is admissible only at kickoff and otherwise appears only in the
+   CLV columns. Models and pooling weights are fitted walk-forward on matches that finished before
+   the one being priced.
+3. **Fair value.** A log-linear pool of the bookmaker line, the venue's normalized price, a
+   per-league Poisson/Dixon-Coles model and Elo (per-league home advantage, season-boundary
+   regression, promoted teams seeded at relegated-team level). Weights and per-outcome intercepts
+   are fitted by log loss with recency weighting and shrinkage to a prior that trusts the
+   bookmaker most, bootstrapped by matchday for uncertainty, with floors that widen when the pool
+   is on thin data or the decision is long before kickoff.
+4. **Edge and confidence.** For each YES/NO contract: fee-aware edge at the fill (ask for YES,
+   1 − bid for NO), its z-score and 20th percentile, edge vs the quote mid, the bookmaker line's
+   own edge, agreement between independent sources, spread, volume, staleness, price band.
+   Confidence = edge significance (35; full marks at z = 1.5) + edge size (15; full at 6 pts) + agreement (20) +
+   liquidity (15) + price band (10) + freshness (5), scaled down on thin data or fatigue mismatches. Tiers: A ≥ 75,
+   B ≥ 60, C ≥ 45.
+5. **Discipline.** Gates: consistent three-way quotes, spread ≤ 6c, price 0.10–0.90, last trade
+   ≤ 48 h old, conservative edge ≥ 0, edge vs mid ≥ 1c, the bookmaker line alone must not disagree.
+   One bet per match, fractional Kelly (default ¼) with per-bet and per-day caps, fees computed at
+   the lot size, minimum lot 10 contracts.
+6. **Proof.** Brier and log loss with a paired test, calibration, cluster-bootstrap ROI intervals
+   (by match and matchday), realized ROI by tier and by predicted-edge decile with Spearman rho,
+   closing line value vs the venue's own close and vs Pinnacle, and distance of each source to the
+   closing line.
 
-`build.bat` creates a virtual environment, installs the dependencies, runs the tests, and writes
-`release\rsa.exe` (plus `release\rsa-<version>-windows-x64.exe`). On macOS/Linux run
-`./build.sh` for a native binary. PyInstaller cannot cross-compile: the Windows `.exe` must be
-built on Windows (or by the GitHub workflow above).
+Fees default to Robinhood's June 2026 schedule: commission `0.10 × p × (1 − p)` per contract
+(`0.05` with Gold), rounded up to the cent per order, plus a $0.01 exchange fee.
 
-| command | what it does |
-|---|---|
-| `build.bat` / `./build.sh` | venv + install + tests + `release/rsa[.exe]` |
-| `python scripts/build_exe.py` | just the PyInstaller step (needs `pip install -e ".[build]"`) |
-| `python scripts/set_version.py v0.1.1` | stamp a version into `pyproject.toml` and `rsa/__init__.py` |
-| `pyinstaller rsa.spec` | raw PyInstaller build to `dist/rsa[.exe]` |
-
-The executable covers everything except the optional Kalshi API-key signing (`--kalshi-key-id`),
-which needs the `cryptography` package; use the Python install for that, or build with
-`RSA_BUNDLE_CRYPTOGRAPHY=1` set and `cryptography` installed.
-
-## Quick start (Python)
+## Command line
 
 ```bash
-pip install -e ".[dev]"         # pandas, numpy, requests, tzdata (+ pytest)
-rsa                             # no arguments -> the same menu the .exe shows
-rsa demo                        # synthetic end-to-end run, no network -> reports/demo/report.md
-rsa series                      # list Kalshi soccer series tickers (live)
+pip install -e ".[dev]"
+rsa hq                          # the app window
+rsa demo                        # synthetic end-to-end run -> reports/demo/{report,picks}.md
 rsa run --leagues epl,laliga,bundesliga,seriea,ligue1,mls --data-dir data/live
+rsa picks --data-dir data/live --bankroll 1000 --min-confidence 60
+rsa backtest --data-dir data/live --fees robinhood_gold --minutes-before 360
+rsa series                      # list Kalshi soccer series tickers
+rsa menu                        # the text menu
 ```
 
-`rsa run` = `rsa fetch` (network, cached under `data/live/cache`) + `rsa backtest` (offline).
-Re-run `rsa backtest` with different `--fees`, `--min-edge`, `--fill last`, `--slippage` without
-re-downloading. Output goes to `reports/<data-dir name>/`:
-
-| file | contents |
-|---|---|
-| `report.md` | the findings, with a plain-language verdict section |
-| `summary.json` | the same numbers, machine-readable |
-| `joined.csv` | one row per match: prices, quotes, odds, model probabilities, result |
-| `bets_<reference>.csv` | every bet a strategy would have placed, with fill, fee, edge, P&L |
-| `unmatched_events.csv` | priced events that could not be joined to a fixture (fix aliases in `rsa/teams.py`) |
-
-Useful flags for `fetch`/`run`: `--start/--end` (default: 2026-07-20 → today), `--no-candles`
-(skip bid/ask, faster), `--minutes-before 60`, `--prices-csv my_rothera_prices.csv`,
-`--no-kalshi` (results/odds only), `--kalshi-key-id/--kalshi-private-key` (optional API auth
-for higher rate limits; needs `pip install cryptography`).
+Reports go to `reports/<data-dir name>/`: `report.md`, `picks.md`, `summary.json`, `joined.csv`,
+`pro_portfolio.csv`, `pro_candidates.csv`, `picks.csv`, `picks_candidates.csv`, `bets_*.csv`.
 
 ### Importing prices from Robinhood / Rothera
 
 A CSV with columns `league,team_a,team_b,outcome_label,price` (plus optional `venue,event_id,
-market_ticker,yes_bid,yes_ask,snapshot_time,kickoff,volume,result`). `outcome_label` is a team
-name or `TIE`; prices may be cents or dollars. See `rsa/prices.py`.
+market_ticker,yes_bid,yes_ask,snapshot_time,kickoff,volume,result,close_price`). See `rsa/prices.py`.
 
-## Reading the report
+## Building locally
 
-* A tradeable edge needs **all** of: a bias that is stable across leagues and weeks, ROI whose
-  95% interval excludes zero **after fees**, and fills at the ask. The verdict section only
-  claims what the numbers support at the sample size.
-* The closing line (`book`) is the sharpest public benchmark. A strategy that only beats Elo or
-  Poisson is not evidence of an edge; those models are there to show what happens when you
-  bet on a weak reference.
-* Six weeks of post-World-Cup club football is ~250 matches across six leagues. Intervals will
-  be wide; keep re-running as the season goes on (`rsa run` appends nothing—it re-fetches the
-  window from cache plus new days).
+```bat
+build.bat            :: Windows: venv + install + tests + release\RobinhoodSoccerHQ.exe and release\rsa.exe
+./build.sh           #  macOS/Linux: the same, plus "Robinhood Soccer HQ.app" on macOS
+```
+
+PyInstaller does not cross-compile; build each platform on itself or use the GitHub workflow.
+`python scripts/set_version.py v0.2.1` stamps a version. Tests: `pytest`.
 
 ## Status and caveats
 
-* **No live data has been pulled yet.** This project was built in a sandbox whose network
-  policy blocks Kalshi, ESPN and football-data.co.uk, so the only report in the repo
-  (`reports/demo/report.md`) is from **synthetic** data with planted biases. Run `rsa run` on
-  your own machine to get real findings.
-* Kalshi archives settled markets past a rolling cutoff to `/historical/*` endpoints; the client
-  reads both tiers. Endpoint shapes were taken from Kalshi's public documentation and both the
-  cents and `_dollars` price encodings are handled, but if a field name changes, `rsa/kalshi.py`
-  is the place to look.
-* Series tickers for the Europa/Conference League, Leagues Cup and Liga MX follow Kalshi's naming
-  convention but are marked unverified in `rsa/config.py`; confirm with `rsa series`.
-* ESPN's scoreboard endpoint is unofficial and unauthenticated; football-data.co.uk covers the
-  big-five European leagues only (MLS uses ESPN's moneyline as the odds reference, which is
-  weaker than Pinnacle closing).
-* "Last trade" fills overstate what you can actually get; the default `--fill ask` is realistic
-  for Kalshi-routed contracts when candles are available.
+* No live data has been analyzed in this repository yet: it was built in a sandbox whose network
+  blocks Kalshi, ESPN and football-data.co.uk. All committed reports are from synthetic data.
+* Six weeks of post-World-Cup football is a few hundred matches; every interval will be wide.
+  Positive closing line value over 50+ bets is the first thing to look for, not ROI.
+* Kalshi archives old settled markets to `/historical/*`; the client reads both tiers. Series
+  tickers for Europa/Conference League, Leagues Cup and Liga MX are inferred, not verified.
+* ESPN's scoreboard endpoint is unofficial. MLS has no football-data odds, so its fair value leans
+  on the venue price and the models; its picks deserve extra skepticism.
+* The packaged app excludes the optional Kalshi API-key signing (`cryptography`); public market
+  data needs no key.
 
 ## Project layout
 
 ```
-rsa/config.py     leagues, series tickers, ESPN/football-data codes, analysis window
-rsa/fees.py       Robinhood / Kalshi fee models, break-even maths
-rsa/kalshi.py     public API client (live + historical tiers), pre-kickoff snapshots
-rsa/prices.py     venue-agnostic PriceSnapshot + CSV import/export
-rsa/results.py    ESPN + football-data.co.uk loaders, de-vigging (Shin), odds merge
-rsa/teams.py      team-name aliases, normalization, fuzzy matching, title parsing
-rsa/matching.py   join priced events to fixtures, one row per match
-rsa/models.py     Elo (Davidson draw), Poisson/Dixon-Coles, walk-forward predictions
-rsa/backtest.py   scoring rules, calibration, bias tables, fee-aware strategies, bootstrap
-rsa/report.py     markdown report + verdicts
-rsa/pipeline.py   collect -> save -> analyze -> write
-rsa/synth.py      synthetic raw-shaped fixtures + offline Kalshi client (used by `rsa demo`)
-rsa/cli.py        command line
-rsa/interactive.py  menu shown when started without arguments (double-clicked .exe)
-scripts/          launcher.py (PyInstaller entry), build_exe.py, set_version.py
-rsa.spec          PyInstaller spec (bundles tzdata for zoneinfo on Windows)
-build.bat/.sh     one-shot local builds; .github/workflows/build.yml builds on GitHub
-tests/            pytest suite (fees, parsing, matching, models, backtest, demo pipeline, menu)
+rsa/hq/           the HQ: server.py (local API + window), state.py (settings, jobs), jobs.py, ui/ (html/css/js)
+rsa/pro.py        pooled fair value, uncertainty, Kelly, confidence, gates, portfolio, CLV, deciles
+rsa/backtest.py   scoring rules, calibration, bias tables, strategies, bootstrap; runs the pro strategy
+rsa/models.py     Elo (per-league home advantage, season boundary) + per-league Poisson/Dixon-Coles
+rsa/kalshi.py     Kalshi client (live + historical tiers), entry/closing snapshots, open markets
+rsa/results.py    ESPN + football-data.co.uk loaders (incl. fixtures.csv), de-vigging
+rsa/matching.py   join priced events to fixtures; decision-time vs closing book references
+rsa/pipeline.py   collect -> save -> analyze -> write; upcoming fixtures -> picks
+rsa/report.py     markdown reports and the JSON summary the HQ reads
+rsa/synth.py      synthetic raw-shaped data + offline Kalshi client (demo)
+rsa/cli.py        commands; scripts/, rsa.spec, build.bat/.sh, .github/workflows/build.yml: packaging
+tests/            pytest suite
 ```
-
-Run the tests with `pytest`.

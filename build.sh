@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds release/rsa (and release/rsa-<version>-<os>-<arch>) on macOS or Linux.
+# Builds Robinhood Soccer HQ: release/RobinhoodSoccerHQ (+ .app on macOS) and release/rsa (CLI).
 # Needs Python 3.10+. The Windows .exe must be built on Windows (build.bat) or by
 # the GitHub Actions workflow: PyInstaller does not cross-compile.
 set -euo pipefail
@@ -15,4 +15,4 @@ python -m pip install -e ".[dev,build]"
 python -m pytest -q
 python scripts/build_exe.py
 echo
-echo "Done: release/rsa  (run ./release/rsa --help)"
+echo "Done: release/RobinhoodSoccerHQ (the app) and release/rsa (command line)"
